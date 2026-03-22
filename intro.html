@@ -1,0 +1,39 @@
+﻿<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>INTRO</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/shared.css">
+</head>
+
+<body>
+    <canvas id="topo"></canvas>
+
+    <div class="content">
+        <p>LE LIVE VAS</p>
+        <p class="outline">COMMENCER</p>
+    </div>
+    <div id="countdown">05:00</div>
+
+    <script src="assets/js/shared.js"></script>
+    <script>
+        (() => {
+            const el = document.getElementById('countdown');
+            let remaining = 5 * 60 + 1;
+            function tick() {
+                const m = String(Math.floor(remaining / 60)).padStart(2, '0');
+                const s = String(remaining % 60).padStart(2, '0');
+                el.textContent = m + ':' + s;
+                if (remaining > 0) { remaining--; setTimeout(tick, 1000); }
+            }
+            tick();
+        })();
+    </script>
+</body>
+
+</html>

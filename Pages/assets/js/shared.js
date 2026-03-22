@@ -41,7 +41,7 @@
   }
 
   pollColor();
-  setInterval(pollColor, 1000);
+  setInterval(pollColor, 3000);
 
   // ── Grille de points ──
   let dotCount = 0;

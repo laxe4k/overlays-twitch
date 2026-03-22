@@ -10,11 +10,25 @@
 
 <body>
     <canvas id="topo"></canvas>
+    <script>
+        /* Capture l'ID du setInterval créé par shared.js pour pouvoir l'arrêter */
+        const _origSetInterval = window.setInterval;
+        const _intervalIds = [];
+        window.setInterval = function (...args) {
+            const id = _origSetInterval.apply(window, args);
+            _intervalIds.push(id);
+            return id;
+        };
+    </script>
     <script src="assets/js/shared.js"></script>
     <script>
+        /* Restaure setInterval natif */
+        window.setInterval = _origSetInterval;
+
         /* Fige le fond après 3s (laisse le temps à la couleur MelodyHue d'arriver) */
         setTimeout(() => {
             window.requestAnimationFrame = function () { return 0; };
+            _intervalIds.forEach(id => clearInterval(id));
         }, 3000);
     </script>
 </body>

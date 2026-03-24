@@ -8,6 +8,7 @@
 
   const SPACING = 10;
   const TAU = 6.2832;
+  const FRAME_INTERVAL = 1000 / 30; // cap 30 fps
 
   // ── Couleur dynamique via MelodyHue (avec fondu) ──
   window._colR = 1;
@@ -208,8 +209,11 @@
     }
   }
 
+  let _lastFrame = 0;
   function render(ts) {
-    const t = ts * 0.001;
+    requestAnimationFrame(render);
+    if (ts - _lastFrame < FRAME_INTERVAL) return;
+    _lastFrame = ts;
     ensureBuffer();
     lerpColor();
     const fR = window._colR,
@@ -219,7 +223,7 @@
     updateOffsets();
 
     // Avancer les accumulateurs de phase (vitesse variable = jamais de boucle)
-    const dt = 1 / 60;
+    const dt = 1 / 30;
     for (const e of EM) {
       // Dérive des vitesses position
       e.vx1 += e.dvx1;
@@ -335,7 +339,6 @@
     }
 
     ctx.putImageData(imgData, 0, 0);
-    requestAnimationFrame(render);
   }
 
   requestAnimationFrame(render);

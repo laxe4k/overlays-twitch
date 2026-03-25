@@ -19,7 +19,7 @@
     _targetB = 1;
   const _MH_API =
     "https://melodyhue.com/developer/api/Cr4efK3YTBuiwAeQEEo4VA/color";
-  const _LERP = 0.03;
+  const _LERP = 0.15;
 
   function pollColor() {
     fetch(_MH_API)
@@ -42,7 +42,7 @@
   }
 
   pollColor();
-  setInterval(pollColor, 3000);
+  setInterval(pollColor, 1000);
 
   // ── Grille de points ──
   let dotCount = 0;

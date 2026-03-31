@@ -1,37 +1,69 @@
 # Overlays Twitch
 
-Pages HTML utilisées comme overlays pour mes lives Twitch via OBS.
+Overlays Vue.js utilisés pour mes lives Twitch via OBS, hébergés sur [overlays.laxe4k.com](https://overlays.laxe4k.com).
 
 ## Pages
 
-| Fichier | Description |
-|---------|-------------|
-| `Pages/intro.html` | Écran d'intro avec compte à rebours |
-| `Pages/pause.html` | Écran de pause |
-| `Pages/outro.html` | Écran de fin de stream |
-| `Pages/background.html` | Fond animé (sans texte) |
-| `Pages/background-fixe.html` | Fond figé après chargement de la couleur |
+| Route | Description |
+|-------|-------------|
+| `/intro` | Écran d'intro avec compte à rebours |
+| `/pause` | Écran de pause |
+| `/outro` | Écran de fin de stream |
+| `/background` | Fond animé (sans texte) |
+| `/background-fixe` | Fond figé après chargement de la couleur |
 
 ## Utilisation
 
-Ajouter une **source Navigateur** dans OBS avec le chemin local du fichier HTML voulu, en **1920×1080**.
+Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue (ex : `https://overlays.laxe4k.com/intro`), en **1920×1080**.
+
+## Stack
+
+- [Vue.js 3](https://vuejs.org/) + TypeScript
+- [Vite](https://vite.dev/)
+- [GSAP](https://gsap.com/) — animations d'entrée du texte
+- [MelodyHue](https://melodyhue.com/) — couleur dynamique du fond
 
 ## Structure
 
 ```
-├── Pages/
-│   ├── intro.html
-│   ├── pause.html
-│   ├── outro.html
-│   ├── background.html
-│   ├── background-fixe.html
+├── src/
+│   ├── views/
+│   │   ├── IntroView.vue
+│   │   ├── PauseView.vue
+│   │   ├── OutroView.vue
+│   │   ├── BackgroundView.vue
+│   │   └── BackgroundFixeView.vue
+│   ├── components/
+│   │   ├── DotField.vue
+│   │   └── OverlayContent.vue
+│   ├── composables/
+│   │   └── useDotField.ts
+│   ├── router/
+│   │   └── index.ts
 │   └── assets/
-│       ├── css/
-│       │   └── shared.css
-│       └── js/
-│           └── shared.js
-├── LICENSE
-└── README.md
+│       └── main.css
+├── public/
+│   └── fonts/
+├── Dockerfile
+├── docker-compose.yml
+└── nginx.conf
 ```
 
-Les styles et l'animation de fond sont partagés via `shared.css` et `shared.js`.
+## Développement
+
+```sh
+npm install
+npm run dev
+```
+
+## Build & Déploiement
+
+```sh
+npm run build
+```
+
+Déployé via Docker sur [Dokploy](https://dokploy.com/) :
+
+```sh
+docker compose up -d
+```

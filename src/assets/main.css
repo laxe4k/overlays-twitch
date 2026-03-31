@@ -1,0 +1,39 @@
+/* ═══════════════════════════════════════════════════════
+   Overlays Twitch — Styles partagés
+   ═══════════════════════════════════════════════════════ */
+
+@font-face {
+  font-family: 'Poppins';
+  src: url('/fonts/Poppins/Poppins-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Poppins';
+  src: url('/fonts/Poppins/Poppins-Black.ttf') format('truetype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  font-family: 'Poppins', sans-serif;
+  background: #000;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+}

@@ -39,7 +39,7 @@ export function useMelodyHue() {
   return color
 }
 
-// ── DotField engine ──
+// ── WebGL DotField engine ──
 
 interface Current {
   x: number
@@ -85,29 +85,168 @@ interface Emitter {
 
 const SPACING = 10
 const FRAME_INTERVAL = 1000 / 30
-const MAX_OFFSET = 10
-const DAMPING = 0.97
 const NUM_EM = 3
-const ALPHA_LUT = new Uint8Array([3, 10, 25, 50, 85])
-const RAD_LUT = [1, 1, 2, 2, 3]
-const BUCKETS = 5
+
+// ── Shaders ──
+
+const VERT_SRC = `#version 300 es
+in vec2 a_position;
+void main() { gl_Position = vec4(a_position, 0.0, 1.0); }
+`
+
+const FRAG_SRC = `#version 300 es
+precision highp float;
+
+uniform vec2 u_resolution;
+uniform vec3 u_color;
+uniform vec2 u_gridOffset;
+
+uniform vec2  u_currentPos[2];
+uniform float u_currentAngle[2];
+uniform float u_currentSpeed[2];
+uniform float u_currentRadius[2];
+
+uniform vec2  u_emitterPos[3];
+uniform float u_emitterFreq[3];
+uniform float u_emitterWph[3];
+
+out vec4 fragColor;
+
+const float SPACING     = 10.0;
+const float MAX_OFFSET  = 10.0;
+const float STEADY      = 5.0;   // 0.15 / (1 - 0.97)
+const int   NUM_EM      = 3;
+const int   BUCKETS     = 5;
+
+const float ALPHA_LUT[5] = float[5](
+  3.0/255.0, 10.0/255.0, 25.0/255.0, 50.0/255.0, 85.0/255.0
+);
+const float RAD_LUT[5] = float[5](1.0, 1.0, 2.0, 2.0, 3.0);
+
+void main() {
+  vec2 px = gl_FragCoord.xy;
+  px.y = u_resolution.y - px.y;
+
+  vec2 gridIdx = round((px - u_gridOffset) / SPACING);
+
+  float best = 0.0;
+
+  for (int dj = -1; dj <= 1; dj++) {
+    for (int di = -1; di <= 1; di++) {
+      vec2 dotBase = u_gridOffset + (gridIdx + vec2(float(di), float(dj))) * SPACING;
+
+      vec2 npos = dotBase / u_resolution;
+      vec2 off  = vec2(0.0);
+
+      for (int c = 0; c < 2; c++) {
+        vec2  d   = npos - u_currentPos[c];
+        float dSq = dot(d, d);
+        float r2  = u_currentRadius[c] * u_currentRadius[c];
+        if (dSq < r2) {
+          float inf = 1.0 - dSq / r2;
+          off += vec2(cos(u_currentAngle[c]), sin(u_currentAngle[c]))
+               * u_currentSpeed[c] * inf;
+        }
+      }
+
+      off = clamp(off * STEADY, -MAX_OFFSET, MAX_OFFSET);
+      vec2 dotPos = dotBase + off;
+
+      // square distance check (matches original rasterisation)
+      vec2 diff = abs(px - dotPos);
+
+      float wave = 0.0;
+      for (int j = 0; j < NUM_EM; j++) {
+        vec2 ed = dotPos - u_emitterPos[j];
+        wave += sin(length(ed) * u_emitterFreq[j] - u_emitterWph[j]);
+      }
+
+      float raw    = (wave + float(NUM_EM)) / (float(NUM_EM) * 2.0);
+      float biased = raw * raw * (3.0 - 2.0 * raw);
+      int   b      = min(BUCKETS - 1, int(biased * float(BUCKETS)));
+
+      float alpha = ALPHA_LUT[b];
+      float rad   = RAD_LUT[b];
+
+      if (diff.x <= rad && diff.y <= rad) {
+        best = max(best, alpha);
+      }
+    }
+  }
+
+  // Vignette
+  vec2  center = u_resolution * 0.5;
+  float d      = length(px - center);
+  float maxR   = max(u_resolution.x, u_resolution.y) * 0.72;
+  float minR   = u_resolution.x * 0.12;
+  float vig    = 1.0;
+  if (d > minR) vig = 1.0 - min(1.0, (d - minR) / (maxR - minR)) * 0.65;
+
+  fragColor = vec4(u_color * best * vig, 1.0);
+}
+`
+
+// ── GL helpers ──
+
+function compileShader(gl: WebGL2RenderingContext, type: number, src: string) {
+  const s = gl.createShader(type)!
+  gl.shaderSource(s, src)
+  gl.compileShader(s)
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    const info = gl.getShaderInfoLog(s)
+    gl.deleteShader(s)
+    throw new Error('Shader compile: ' + info)
+  }
+  return s
+}
+
+function createProgram(gl: WebGL2RenderingContext) {
+  const vs = compileShader(gl, gl.VERTEX_SHADER, VERT_SRC)
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC)
+  const pg = gl.createProgram()!
+  gl.attachShader(pg, vs)
+  gl.attachShader(pg, fs)
+  gl.linkProgram(pg)
+  if (!gl.getProgramParameter(pg, gl.LINK_STATUS))
+    throw new Error('Program link: ' + gl.getProgramInfoLog(pg))
+  gl.deleteShader(vs)
+  gl.deleteShader(fs)
+  return pg
+}
+
+// ── Engine ──
 
 export function createDotFieldEngine(canvas: HTMLCanvasElement) {
-  const ctx = canvas.getContext('2d')!
+  const gl = canvas.getContext('webgl2')!
+  const program = createProgram(gl)
+  gl.useProgram(program)
+
+  // Full-screen quad
+  const quadBuf = gl.createBuffer()!
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf)
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW)
+  const aPos = gl.getAttribLocation(program, 'a_position')
+  gl.enableVertexAttribArray(aPos)
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0)
+
+  // Uniform locations
+  const u = {
+    resolution: gl.getUniformLocation(program, 'u_resolution'),
+    color: gl.getUniformLocation(program, 'u_color'),
+    gridOffset: gl.getUniformLocation(program, 'u_gridOffset'),
+    cPos: [0, 1].map((i) => gl.getUniformLocation(program, `u_currentPos[${i}]`)),
+    cAngle: [0, 1].map((i) => gl.getUniformLocation(program, `u_currentAngle[${i}]`)),
+    cSpeed: [0, 1].map((i) => gl.getUniformLocation(program, `u_currentSpeed[${i}]`)),
+    cRadius: [0, 1].map((i) => gl.getUniformLocation(program, `u_currentRadius[${i}]`)),
+    ePos: [0, 1, 2].map((i) => gl.getUniformLocation(program, `u_emitterPos[${i}]`)),
+    eFreq: [0, 1, 2].map((i) => gl.getUniformLocation(program, `u_emitterFreq[${i}]`)),
+    eWph: [0, 1, 2].map((i) => gl.getUniformLocation(program, `u_emitterWph[${i}]`)),
+  }
+
   let W = 0,
     H = 0,
     cx = 0,
-    cy = 0,
-    cols = 0,
-    rows = 0
-  let dotCount = 0
-  let baseX = new Float32Array(0)
-  let baseY = new Float32Array(0)
-  let offX = new Float32Array(0)
-  let offY = new Float32Array(0)
-  let imgData: ImageData | null = null
-  let buf32: Uint32Array
-  let vigLUT: Uint16Array
+    cy = 0
   let _ct = 0
   let _lastFrame = 0
   let rafId = 0
@@ -163,57 +302,20 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
     })
   }
 
-  function initGrid() {
-    cols = Math.ceil(W / SPACING) + 2
-    rows = Math.ceil(H / SPACING) + 2
-    dotCount = cols * rows
-    baseX = new Float32Array(dotCount)
-    baseY = new Float32Array(dotCount)
-    offX = new Float32Array(dotCount)
-    offY = new Float32Array(dotCount)
-    const ox = ((W % SPACING) / 2) | 0
-    const oy = ((H % SPACING) / 2) | 0
-    let idx = 0
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        baseX[idx] = ox + i * SPACING
-        baseY[idx] = oy + j * SPACING
-        offX[idx] = 0
-        offY[idx] = 0
-        idx++
-      }
-    }
-  }
-
-  function buildVigLUT() {
-    vigLUT = new Uint16Array(W * H)
-    const maxR = Math.max(W, H) * 0.72
-    const minR = W * 0.12
-    const range = maxR - minR
-    for (let y = 0; y < H; y++) {
-      const dy = y - cy
-      for (let x = 0; x < W; x++) {
-        const dx = x - cx
-        const d = Math.sqrt(dx * dx + dy * dy)
-        let f = 1
-        if (d > minR) f = 1 - Math.min(1, (d - minR) / range) * 0.65
-        vigLUT[y * W + x] = (f * 256) | 0
-      }
-    }
-  }
-
   function resize() {
     W = canvas.width = canvas.parentElement?.clientWidth ?? innerWidth
     H = canvas.height = canvas.parentElement?.clientHeight ?? innerHeight
     cx = W / 2
     cy = H / 2
-    initGrid()
-    buildVigLUT()
+    gl.viewport(0, 0, W, H)
+    gl.uniform2f(u.resolution, W, H)
+    gl.uniform2f(u.gridOffset, ((W % SPACING) / 2) | 0, ((H % SPACING) / 2) | 0)
   }
 
-  function updateOffsets() {
+  function uploadCurrents() {
     _ct++
-    for (const c of currents) {
+    for (let i = 0; i < currents.length; i++) {
+      const c = currents[i]!
       c.angle += c.da * 0.005 + Math.sin(_ct * 0.003 + c.ph_a) * 0.002
       c.x += c.dx * 0.005 + Math.sin(_ct * 0.002 + c.ph_x) * 0.0003
       c.y += c.dy * 0.005 + Math.cos(_ct * 0.0025 + c.ph_y) * 0.0003
@@ -222,53 +324,17 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
       c.ph_y += 0.00006
       if (c.x < -0.1 || c.x > 1.1) c.dx *= -1
       if (c.y < -0.1 || c.y > 1.1) c.dy *= -1
-    }
-    for (let i = 0; i < dotCount; i++) {
-      const nx = baseX[i]! / W
-      const ny = baseY[i]! / H
-      let fx = 0,
-        fy = 0
-      for (const c of currents) {
-        const dx = nx - c.x,
-          dy = ny - c.y
-        const dSq = dx * dx + dy * dy
-        const r2 = c.radius * c.radius
-        if (dSq > r2) continue
-        const inf = 1 - dSq / r2
-        fx += Math.cos(c.angle) * c.speed * inf
-        fy += Math.sin(c.angle) * c.speed * inf
-      }
-      offX[i] = offX[i]! * DAMPING + fx * 0.15
-      offY[i] = offY[i]! * DAMPING + fy * 0.15
-      if (offX[i]! > MAX_OFFSET) offX[i] = MAX_OFFSET
-      else if (offX[i]! < -MAX_OFFSET) offX[i] = -MAX_OFFSET
-      if (offY[i]! > MAX_OFFSET) offY[i] = MAX_OFFSET
-      else if (offY[i]! < -MAX_OFFSET) offY[i] = -MAX_OFFSET
+      gl.uniform2f(u.cPos[i]!, c.x, c.y)
+      gl.uniform1f(u.cAngle[i]!, c.angle)
+      gl.uniform1f(u.cSpeed[i]!, c.speed)
+      gl.uniform1f(u.cRadius[i]!, c.radius)
     }
   }
 
-  function ensureBuffer() {
-    if (!imgData || imgData.width !== W || imgData.height !== H) {
-      imgData = ctx.createImageData(W, H)
-      buf32 = new Uint32Array(imgData.data.buffer)
-    }
-  }
-
-  function render(ts: number) {
-    if (destroyed) return
-    rafId = requestAnimationFrame(render)
-    if (ts - _lastFrame < FRAME_INTERVAL) return
-    _lastFrame = ts
-    ensureBuffer()
-    lerpColor()
-    const fR = color.r,
-      fG = color.g,
-      fB = color.b
-
-    updateOffsets()
-
+  function uploadEmitters() {
     const dt = 1 / 30
-    for (const e of EM) {
+    for (let j = 0; j < NUM_EM; j++) {
+      const e = EM[j]!
       e.vx1 += e.dvx1
       e.vx2 += e.dvx2
       e.vy1 += e.dvy1
@@ -292,77 +358,29 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
       if (e.freq < 0.004 || e.freq > 0.016) e.dFreq *= -1
       if (e.rx < 0.13 || e.rx > 0.45) e.dRx *= -1
       if (e.ry < 0.13 || e.ry > 0.45) e.dRy *= -1
+      const posX =
+        cx + (Math.cos(e.px1) * 0.6 + Math.cos(e.px2) * 0.3 + Math.sin(e.px3) * 0.1) * W * e.rx
+      const posY =
+        cy + (Math.sin(e.py1) * 0.6 + Math.sin(e.py2) * 0.3 + Math.cos(e.py3) * 0.1) * H * e.ry
+      gl.uniform2f(u.ePos[j]!, posX, posY)
+      gl.uniform1f(u.eFreq[j]!, e.freq)
+      gl.uniform1f(u.eWph[j]!, e.wavePh)
     }
+  }
 
-    const emPos = []
-    for (let j = 0; j < NUM_EM; j++) {
-      const e = EM[j]!
-      emPos.push({
-        x: cx + (Math.cos(e.px1) * 0.6 + Math.cos(e.px2) * 0.3 + Math.sin(e.px3) * 0.1) * W * e.rx,
-        y: cy + (Math.sin(e.py1) * 0.6 + Math.sin(e.py2) * 0.3 + Math.cos(e.py3) * 0.1) * H * e.ry,
-        freq: e.freq,
-        wph: e.wavePh,
-      })
-    }
+  function render(ts: number) {
+    if (destroyed) return
+    rafId = requestAnimationFrame(render)
+    if (ts - _lastFrame < FRAME_INTERVAL) return
+    _lastFrame = ts
 
-    buf32.fill(0xff000000)
+    lerpColor()
+    gl.uniform3f(u.color, color.r, color.g, color.b)
 
-    for (let i = 0; i < dotCount; i++) {
-      const px = (baseX[i]! + offX[i]!) | 0
-      const py = (baseY[i]! + offY[i]!) | 0
+    uploadCurrents()
+    uploadEmitters()
 
-      let wave = 0
-      for (let j = 0; j < NUM_EM; j++) {
-        const dx = px - emPos[j]!.x,
-          dy = py - emPos[j]!.y
-        wave += Math.sin(Math.sqrt(dx * dx + dy * dy) * emPos[j]!.freq - emPos[j]!.wph)
-      }
-
-      const raw = (wave + NUM_EM) / (NUM_EM * 2)
-      const biased = raw * raw * (3 - 2 * raw)
-      const b = Math.min(BUCKETS - 1, (biased * BUCKETS) | 0)
-      const alpha = ALPHA_LUT[b]!
-      const rad = RAD_LUT[b]!
-
-      const startY = py - rad < 0 ? 0 : py - rad
-      const endY = py + rad >= H ? H - 1 : py + rad
-      const startX = px - rad < 0 ? 0 : px - rad
-      const endX = px + rad >= W ? W - 1 : px + rad
-
-      for (let yy = startY; yy <= endY; yy++) {
-        const rowOff = yy * W
-        for (let xx = startX; xx <= endX; xx++) {
-          const idx = rowOff + xx
-          const existing = buf32[idx]!
-          const er = existing & 0xff
-          const eg = (existing >> 8) & 0xff
-          const eb = (existing >> 16) & 0xff
-          const cr = (alpha * fR) | 0
-          const cg = (alpha * fG) | 0
-          const cb = (alpha * fB) | 0
-          if (cr > er || cg > eg || cb > eb) {
-            buf32[idx] =
-              0xff000000 |
-              ((cb > eb ? cb : eb) << 16) |
-              ((cg > eg ? cg : eg) << 8) |
-              (cr > er ? cr : er)
-          }
-        }
-      }
-    }
-
-    for (let i = 0; i < buf32.length; i++) {
-      const pixel = buf32[i]!
-      const r = pixel & 0xff
-      if (r === 0 && ((pixel >> 8) & 0xff) === 0) continue
-      const vig = vigLUT[i]!
-      const nr = (r * vig) >> 8
-      const ng = (((pixel >> 8) & 0xff) * vig) >> 8
-      const nb = (((pixel >> 16) & 0xff) * vig) >> 8
-      buf32[i] = 0xff000000 | (nb << 16) | (ng << 8) | nr
-    }
-
-    ctx.putImageData(imgData!, 0, 0)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
   }
 
   function start() {
@@ -376,6 +394,8 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
     destroyed = true
     cancelAnimationFrame(rafId)
     removeEventListener('resize', resize)
+    gl.deleteProgram(program)
+    gl.deleteBuffer(quadBuf)
   }
 
   /** Fige l'animation après un délai (pour background-fixe) */

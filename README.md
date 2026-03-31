@@ -20,8 +20,8 @@ Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue (ex : `
 
 - [Vue.js 3](https://vuejs.org/) + TypeScript
 - [Vite](https://vite.dev/)
-- [GSAP](https://gsap.com/) — animations d'entrée du texte
-- [MelodyHue](https://melodyhue.com/) — couleur dynamique du fond
+- [GSAP](https://gsap.com/) - animations d'entrée du texte
+- [MelodyHue](https://melodyhue.com/) - couleur dynamique du fond
 
 ## Structure
 

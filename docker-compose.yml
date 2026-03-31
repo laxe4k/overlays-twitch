@@ -2,5 +2,5 @@ services:
   overlays:
     build: .
     restart: unless-stopped
-    ports:
-      - "80:80"
+    expose:
+      - '80'

@@ -2,8 +2,7 @@ import { reactive } from 'vue'
 
 const TAU = Math.PI * 2
 const LERP = 0.15
-const MELODY_HUE_API =
-  'https://melodyhue.com/developer/api/Cr4efK3YTBuiwAeQEEo4VA/color'
+const MELODY_HUE_API = 'https://melodyhue.com/developer/api/Cr4efK3YTBuiwAeQEEo4VA/color'
 
 const color = reactive({ r: 1, g: 1, b: 1 })
 let targetR = 1,
@@ -299,12 +298,8 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
     for (let j = 0; j < NUM_EM; j++) {
       const e = EM[j]!
       emPos.push({
-        x:
-          cx +
-          (Math.cos(e.px1) * 0.6 + Math.cos(e.px2) * 0.3 + Math.sin(e.px3) * 0.1) * W * e.rx,
-        y:
-          cy +
-          (Math.sin(e.py1) * 0.6 + Math.sin(e.py2) * 0.3 + Math.cos(e.py3) * 0.1) * H * e.ry,
+        x: cx + (Math.cos(e.px1) * 0.6 + Math.cos(e.px2) * 0.3 + Math.sin(e.px3) * 0.1) * W * e.rx,
+        y: cy + (Math.sin(e.py1) * 0.6 + Math.sin(e.py2) * 0.3 + Math.cos(e.py3) * 0.1) * H * e.ry,
         freq: e.freq,
         wph: e.wavePh,
       })

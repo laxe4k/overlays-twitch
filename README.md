@@ -9,6 +9,7 @@ Overlays Vue.js utilisés pour mes lives Twitch via OBS, hébergés sur [overlay
 | `/intro` | Écran d'intro avec compte à rebours |
 | `/pause` | Écran de pause |
 | `/outro` | Écran de fin de stream |
+| `/offline` | Écran hors-ligne |
 | `/background` | Fond animé (sans texte) |
 | `/background-fixe` | Fond figé après chargement de la couleur |
 
@@ -31,6 +32,7 @@ Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue (ex : `
 │   │   ├── IntroView.vue
 │   │   ├── PauseView.vue
 │   │   ├── OutroView.vue
+│   │   ├── OfflineView.vue
 │   │   ├── BackgroundView.vue
 │   │   └── BackgroundFixeView.vue
 │   ├── components/

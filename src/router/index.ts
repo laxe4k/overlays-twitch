@@ -9,14 +9,19 @@ const router = createRouter({
       component: () => import('@/views/IntroView.vue'),
     },
     {
+      path: '/pause',
+      name: 'pause',
+      component: () => import('@/views/PauseView.vue'),
+    },
+    {
       path: '/outro',
       name: 'outro',
       component: () => import('@/views/OutroView.vue'),
     },
     {
-      path: '/pause',
-      name: 'pause',
-      component: () => import('@/views/PauseView.vue'),
+      path: '/offline',
+      name: 'offline',
+      component: () => import('@/views/OfflineView.vue'),
     },
     {
       path: '/background',

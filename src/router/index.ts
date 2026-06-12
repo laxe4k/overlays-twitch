@@ -34,6 +34,21 @@ const router = createRouter({
       component: () => import('@/views/BackgroundFixeView.vue'),
     },
     {
+      path: '/cg-start',
+      name: 'cg-start',
+      component: () => import('@/views/CGCupStartView.vue'),
+    },
+    {
+      path: '/cg-pause',
+      name: 'cg-pause',
+      component: () => import('@/views/CGCupPauseView.vue'),
+    },
+    {
+      path: '/cg-fin',
+      name: 'cg-fin',
+      component: () => import('@/views/CGCupFinView.vue'),
+    },
+    {
       path: '/error',
       name: 'error',
       component: () => import('@/views/ErrorView.vue'),

@@ -5,5 +5,5 @@ import OverlayContent from '@/components/OverlayContent.vue'
 
 <template>
   <DotField />
-  <OverlayContent line1="ON A UN" line2="PROBLÈME TECHNIQUE" subtitle="ON REVIENT VITE" />
+  <OverlayContent line1="ON A UN PROBLÈME" line2="TECHNIQUE" subtitle="ON REVIENT VITE" />
 </template>

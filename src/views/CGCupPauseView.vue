@@ -30,7 +30,7 @@ onBeforeUnmount(() => {
   <DotField />
   <div class="cg-top">
     <p class="cg-title">CgCup Summer</p>
-    <p class="cg-title cg-outline">ON EST EN PAUSE</p>
+    <p class="cg-title cg-outline">LE LIVE EST EN PAUSE</p>
   </div>
   <div class="cg-milieu"><!-- libre pour tes trucs perso --></div>
   <div class="cg-bottom">{{ total }}</div>

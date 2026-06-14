@@ -36,22 +36,22 @@ const router = createRouter({
     {
       path: '/cg-start',
       name: 'cg-start',
-      component: () => import('@/views/CGCupStartView.vue'),
+      component: () => import('@/views/CGCupSummerStartView.vue'),
     },
     {
       path: '/cg-pause',
       name: 'cg-pause',
-      component: () => import('@/views/CGCupPauseView.vue'),
+      component: () => import('@/views/CGCupSummerPauseView.vue'),
     },
     {
       path: '/cg-fin',
       name: 'cg-fin',
-      component: () => import('@/views/CGCupFinView.vue'),
+      component: () => import('@/views/CGCupSummerFinView.vue'),
     },
     {
       path: '/error',
       name: 'error',
-      component: () => import('@/views/ErrorView.vue'),
+      component: () => import('@/views/CGCupSummerErrorView.vue'),
     },
     {
       path: '/',

@@ -10,7 +10,7 @@ async function fetchTotal() {
     const res = await fetch('/api/cgcup-summer-donations?limit=1')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
-    total.value = `${data.total}€ récoltés`
+    total.value = `${(data.totalCents / 100).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}€ récoltés`
   } catch (e) {
     console.error('CGCup fetch failed', e)
   }

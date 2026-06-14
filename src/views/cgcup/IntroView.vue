@@ -3,47 +3,37 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import DotField from '@/components/DotField.vue'
 
 const total = ref('Chargement…')
-const line2 = ref('ON SE RETROUVE à 10H')
 let pollTimer: ReturnType<typeof setInterval>
-let dateCheckTimer: ReturnType<typeof setInterval>
-
-function updateLine2() {
-  const fin = new Date('2026-06-14T10:30:00+02:00')
-  if (Date.now() >= fin.getTime()) {
-    line2.value = 'LIVE TERMINÉ, MERCI À TOUS'
-    clearInterval(dateCheckTimer)
-  }
-}
 
 async function fetchTotal() {
   try {
-    const res = await fetch('/api/cgcup-summer-donations?limit=1')
+    const res = await fetch('https://streamlabscharity.com/api/v1/teams/@cgcup-2026/cgcup-2026')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
-    total.value = `${(data.totalCents / 100).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}€ récoltés`
+    total.value = `${(data.amount_raised / 100).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}€ récoltés`
   } catch (e) {
     console.error('CGCup fetch failed', e)
+    total.value = `cgcup.fr`
   }
 }
 
 onMounted(() => {
-  updateLine2()
   fetchTotal()
   pollTimer = setInterval(fetchTotal, 4000)
-  dateCheckTimer = setInterval(updateLine2, 1000)
 })
 
 onBeforeUnmount(() => {
   clearInterval(pollTimer)
-  clearInterval(dateCheckTimer)
 })
+
+const yeah = new Date().getFullYear();
 </script>
 
 <template>
   <DotField />
   <div class="cg-top">
-    <p class="cg-title">CgCup Summer</p>
-    <p class="cg-title cg-outline">{{ line2 }}</p>
+    <p class="cg-title">CgCup {{ yeah }}</p>
+    <p class="cg-title cg-outline">LE LIVE COMMENCE</p>
   </div>
   <div class="cg-milieu"><!-- libre pour tes trucs perso --></div>
   <div class="cg-bottom">{{ total }}</div>

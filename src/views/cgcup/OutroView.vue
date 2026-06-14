@@ -17,12 +17,13 @@ function updateLine2() {
 
 async function fetchTotal() {
   try {
-    const res = await fetch('/api/cgcup-summer-donations?limit=1')
+    const res = await fetch('https://streamlabscharity.com/api/v1/teams/@cgcup-2026/cgcup-2026')
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
-    total.value = `${(data.totalCents / 100).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}€ récoltés`
+    total.value = `${(data.amount_raised / 100).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}€ récoltés`
   } catch (e) {
     console.error('CGCup fetch failed', e)
+    total.value = `cgcup.fr`
   }
 }
 
@@ -37,12 +38,14 @@ onBeforeUnmount(() => {
   clearInterval(pollTimer)
   clearInterval(dateCheckTimer)
 })
+
+const yeah = new Date().getFullYear();
 </script>
 
 <template>
   <DotField />
   <div class="cg-top">
-    <p class="cg-title">CgCup Summer</p>
+    <p class="cg-title">CgCup {{ yeah }}</p>
     <p class="cg-title cg-outline">{{ line2 }}</p>
   </div>
   <div class="cg-milieu"><!-- libre pour tes trucs perso --></div>

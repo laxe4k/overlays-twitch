@@ -10,7 +10,7 @@ let dateCheckTimer: ReturnType<typeof setInterval>
 function updateLine2() {
   const fin = new Date('2026-06-14T10:30:00+02:00')
   if (Date.now() >= fin.getTime()) {
-    line2.value = 'LIVE TERMINÉ, MERCI À TOUS'
+    line2.value = 'LIVE TERMINÉ MERCI À TOUS'
     clearInterval(dateCheckTimer)
   }
 }

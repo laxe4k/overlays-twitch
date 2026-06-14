@@ -34,11 +34,6 @@ const router = createRouter({
       component: () => import('@/views/BackgroundFixeView.vue'),
     },
     {
-      path: '/error',
-      name: 'error',
-      component: () => import('@/views/ErrorView.vue'),
-    },
-    {
       path: '/',
       redirect: '/intro',
     },

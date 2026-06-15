@@ -216,7 +216,7 @@ function createProgram(gl: WebGL2RenderingContext) {
 
 // ── Engine ──
 
-export function createDotFieldEngine(canvas: HTMLCanvasElement) {
+export function createDotFieldEngine(canvas: HTMLCanvasElement, fixedColor?: string) {
   const gl = canvas.getContext('webgl2')!
   const program = createProgram(gl)
   gl.useProgram(program)
@@ -374,7 +374,11 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
     if (ts - _lastFrame < FRAME_INTERVAL) return
     _lastFrame = ts
 
-    lerpColor()
+    if (fixedColor) {
+      // When fixedColor is provided, use it directly instead of lerping
+    } else {
+      lerpColor()
+    }
     gl.uniform3f(u.color, color.r, color.g, color.b)
 
     uploadCurrents()
@@ -384,7 +388,18 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
   }
 
   function start() {
-    useMelodyHue()
+    if (fixedColor) {
+      // Parse fixed color and set both current and target
+      const h = fixedColor.replace('#', '')
+      const r = parseInt(h.substring(0, 2), 16) / 255
+      const g = parseInt(h.substring(2, 4), 16) / 255
+      const b = parseInt(h.substring(4, 6), 16) / 255
+      color.r = targetR = r
+      color.g = targetG = g
+      color.b = targetB = b
+    } else {
+      useMelodyHue()
+    }
     resize()
     addEventListener('resize', resize)
     rafId = requestAnimationFrame(render)

@@ -4,6 +4,7 @@ import { createDotFieldEngine } from '@/composables/useDotField'
 
 const props = defineProps<{
   freeze?: boolean
+  color?: string
 }>()
 
 const canvasRef = ref<HTMLCanvasElement>()
@@ -11,7 +12,7 @@ let engine: ReturnType<typeof createDotFieldEngine>
 
 onMounted(() => {
   if (!canvasRef.value) return
-  engine = createDotFieldEngine(canvasRef.value)
+  engine = createDotFieldEngine(canvasRef.value, props.color)
   engine.start()
   if (props.freeze) {
     engine.freezeAfter(3000)

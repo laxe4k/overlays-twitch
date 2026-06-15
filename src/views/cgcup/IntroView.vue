@@ -30,7 +30,7 @@ const yeah = new Date().getFullYear();
 </script>
 
 <template>
-  <DotField />
+  <DotField color="#14d8fe" />
   <div class="cg-top">
     <p class="cg-title">CgCup {{ yeah }}</p>
     <p class="cg-title cg-outline">LE LIVE COMMENCE</p>
@@ -57,13 +57,13 @@ const yeah = new Date().getFullYear();
   text-transform: uppercase;
   line-height: 1.15;
   margin: 0;
-  color: #fff;
+  color: #fecf03;
   text-shadow: 0 0 8px #000, 0 0 20px #000, 0 0 40px rgba(0,0,0,0.95), 0 0 80px rgba(0,0,0,0.8);
 }
 .cg-title.cg-outline {
   color: transparent;
   font-size: 4.5rem;
-  -webkit-text-stroke: 2px #fff;
+  -webkit-text-stroke: 2px #fecf03;
   text-shadow: none;
   filter: drop-shadow(0 0 8px #000) drop-shadow(0 0 30px rgba(0,0,0,0.8));
 }
@@ -84,7 +84,7 @@ const yeah = new Date().getFullYear();
   font-size: 2.5rem;
   font-weight: 700;
   letter-spacing: 0.3em;
-  color: rgba(255,255,255,0.4);
+  color: #fecf03;
   text-shadow: 0 0 10px rgba(0,0,0,0.9), 0 0 30px rgba(0,0,0,0.7);
 }
 </style>

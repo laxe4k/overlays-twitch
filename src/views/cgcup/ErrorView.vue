@@ -4,7 +4,7 @@ import OverlayContent from '@/components/OverlayContent.vue'
 </script>
 
 <template>
-  <DotField color="#14d8fe" />
+  <DotField color="#3147d8" />
   <div class="error-wrap">
     <OverlayContent line1="ON A UN PROBLÈME" line2="TECHNIQUE" subtitle="ON REVIENT VITE" />
   </div>
@@ -12,13 +12,10 @@ import OverlayContent from '@/components/OverlayContent.vue'
 
 <style scoped>
 .error-wrap :deep(.content) {
-  color: #fecf03;
+  color: #14d8fe;
 }
 .error-wrap :deep(.content .outline) {
-  -webkit-text-stroke: 2px #fecf03;
+  -webkit-text-stroke: 2px #14d8fe;
   -webkit-text-stroke-color: #fecf03;
-}
-.error-wrap :deep(.overlay-sub) {
-  color: #fecf03;
 }
 </style>

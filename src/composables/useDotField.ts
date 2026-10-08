@@ -24,6 +24,7 @@ let targetB = DEFAULT_COLOR.b
 let ciderStarted = false
 let ciderSocket: WebSocket | undefined
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+let playbackEventVersion = 0
 
 function resetToDefaultColor() {
   targetR = DEFAULT_COLOR.r
@@ -153,12 +154,14 @@ function handleCiderMessage(message: string, socket: WebSocket) {
   try {
     const packet: unknown = JSON.parse(message.slice(2))
     const playbackState = getPlaybackState(packet)
+    const hasArtwork = updateColorFromArtwork(packet)
+
+    if (playbackState !== undefined || hasArtwork) playbackEventVersion++
+
     if (playbackState === false) {
       resetToDefaultColor()
       return
     }
-
-    updateColorFromArtwork(packet)
   } catch (error) {
     console.warn('[Cider] Could not parse playback event', error)
   }
@@ -167,6 +170,54 @@ function handleCiderMessage(message: string, socket: WebSocket) {
 function requestCurrentPlayback(socket: WebSocket) {
   if (socket !== ciderSocket || socket.readyState !== WebSocket.OPEN) return
   socket.send('42["API:Playback",{"type":"playbackStatus.getCurrentItem"}]')
+  void loadCurrentPlaybackFromRest(socket)
+}
+
+async function loadCurrentPlaybackFromRest(socket: WebSocket) {
+  const version = playbackEventVersion
+  const headers = { apptoken: CIDER_TOKEN }
+
+  try {
+    const stateResponse = await fetch(
+      `http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/is-playing`,
+      { headers, cache: 'no-store' },
+    )
+
+    if (!stateResponse.ok) {
+      throw new Error(`Cider returned HTTP ${stateResponse.status} for is-playing`)
+    }
+
+    const stateData: unknown = await stateResponse.json()
+    if (socket !== ciderSocket || version !== playbackEventVersion) return
+
+    if (getPlaybackState(stateData) === false) {
+      playbackEventVersion++
+      resetToDefaultColor()
+      return
+    }
+  } catch (error) {
+    console.warn('[Cider] Could not load playback state through REST', error)
+  }
+
+  if (socket !== ciderSocket || version !== playbackEventVersion) return
+
+  try {
+    const artworkResponse = await fetch(
+      `http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/now-playing`,
+      { headers, cache: 'no-store' },
+    )
+
+    if (!artworkResponse.ok) {
+      throw new Error(`Cider returned HTTP ${artworkResponse.status} for now-playing`)
+    }
+
+    const artworkData: unknown = await artworkResponse.json()
+    if (socket === ciderSocket && version === playbackEventVersion) {
+      updateColorFromArtwork(artworkData)
+    }
+  } catch (error) {
+    console.warn('[Cider] Could not load current artwork through REST', error)
+  }
 }
 
 function connectToCider() {

@@ -4,8 +4,15 @@ const TAU = Math.PI * 2
 const LERP = 0.15
 const DEFAULT_COLOR = { r: 83 / 255, g: 172 / 255, b: 106 / 255 }
 const MIN_HSL_LIGHTNESS = 0.55
-const CIDER_IP = import.meta.env.VITE_CIDER_IP?.trim() || '127.0.0.1'
-const CIDER_PORT = Number(import.meta.env.VITE_CIDER_PORT || '10767')
+const ciderQuery = new URLSearchParams(window.location.search)
+const CIDER_IP =
+  ciderQuery.get('CiderAdress')?.trim() ||
+  ciderQuery.get('CiderAddress')?.trim() ||
+  import.meta.env.VITE_CIDER_IP?.trim() ||
+  '127.0.0.1'
+const CIDER_PORT = Number(
+  ciderQuery.get('CiderPort')?.trim() || import.meta.env.VITE_CIDER_PORT || '10767',
+)
 const CIDER_TOKEN = import.meta.env.VITE_CIDER_TOKEN?.trim() || ''
 const CIDER_RECONNECT_DELAY = 2000
 
@@ -16,6 +23,12 @@ let targetB = DEFAULT_COLOR.b
 let ciderStarted = false
 let ciderSocket: WebSocket | undefined
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+
+function resetToDefaultColor() {
+  targetR = DEFAULT_COLOR.r
+  targetG = DEFAULT_COLOR.g
+  targetB = DEFAULT_COLOR.b
+}
 
 function lightenIfTooDark(r: number, g: number, b: number): [number, number, number] {
   const max = Math.max(r, g, b)
@@ -84,6 +97,40 @@ function updateColorFromArtwork(value: unknown): boolean {
   return Object.values(value).some(updateColorFromArtwork)
 }
 
+function getPlaybackState(value: unknown): boolean | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const state = getPlaybackState(item)
+      if (state !== undefined) return state
+    }
+    return undefined
+  }
+
+  if (typeof value !== 'object' || value === null) return undefined
+
+  for (const [key, item] of Object.entries(value)) {
+    const normalizedKey = key.toLowerCase().replace(/[^a-z]/g, '')
+
+    if (
+      ['playing', 'isplaying', 'playbackstate', 'state', 'status'].includes(normalizedKey)
+    ) {
+      if (typeof item === 'boolean') return item
+      if (typeof item === 'string') {
+        const normalizedValue = item.toLowerCase()
+        if (['playing', 'play'].includes(normalizedValue)) return true
+        if (['paused', 'pause', 'stopped', 'stop', 'ended'].includes(normalizedValue)) {
+          return false
+        }
+      }
+    }
+
+    const nestedState = getPlaybackState(item)
+    if (nestedState !== undefined) return nestedState
+  }
+
+  return undefined
+}
+
 function handleCiderMessage(message: string, socket: WebSocket) {
   if (message.startsWith('0')) {
     socket.send(`40${JSON.stringify({ apptoken: CIDER_TOKEN })}`)
@@ -91,7 +138,7 @@ function handleCiderMessage(message: string, socket: WebSocket) {
   }
 
   if (message.startsWith('40')) {
-    void loadCurrentArtwork(socket)
+    void loadCurrentPlaybackState(socket)
     return
   }
 
@@ -104,9 +151,43 @@ function handleCiderMessage(message: string, socket: WebSocket) {
 
   try {
     const packet: unknown = JSON.parse(message.slice(2))
+    const playbackState = getPlaybackState(packet)
+    if (playbackState === false) {
+      resetToDefaultColor()
+      return
+    }
+
+    if (playbackState === true && !updateColorFromArtwork(packet)) {
+      void loadCurrentArtwork(socket)
+      return
+    }
+
     updateColorFromArtwork(packet)
   } catch (error) {
     console.warn('[Cider] Could not parse playback event', error)
+  }
+}
+
+async function loadCurrentPlaybackState(socket: WebSocket) {
+  try {
+    const response = await fetch(`http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/is-playing`, {
+      headers: { apptoken: CIDER_TOKEN },
+      cache: 'no-store',
+    })
+
+    if (!response.ok) {
+      throw new Error(`Cider returned HTTP ${response.status}`)
+    }
+
+    const data: unknown = await response.json()
+    if (socket !== ciderSocket) return
+
+    const isPlaying = getPlaybackState(data)
+    if (isPlaying === false) resetToDefaultColor()
+    else void loadCurrentArtwork(socket)
+  } catch (error) {
+    console.warn('[Cider] Could not load playback state', error)
+    if (socket === ciderSocket) void loadCurrentArtwork(socket)
   }
 }
 

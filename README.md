@@ -12,10 +12,15 @@ Overlays Vue.js utilisés pour mes lives Twitch via OBS, hébergés sur [overlay
 | `/offline` | Écran hors-ligne |
 | `/background` | Fond animé (sans texte) |
 | `/background-fixe` | Fond figé après chargement de la couleur |
+| `/couleur` | Couleur Cider en aplat plein écran |
 
 ## Utilisation
 
 Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue (ex : `https://overlays.laxe4k.com/intro`), en **1920×1080**.
+L'adresse et le port de Cider peuvent être définis directement dans l'URL, par exemple :
+`https://overlays.laxe4k.com/couleur?CiderAdress=192.168.1.50&CiderPort=10767`.
+`CiderAddress` (orthographe standard) est aussi accepté. Sans ces paramètres, la configuration
+`VITE_CIDER_IP` et `VITE_CIDER_PORT` du build est utilisée.
 
 ## Stack
 
@@ -67,7 +72,8 @@ Les couleurs trop sombres sont éclaircies automatiquement ; si Cider est inacce
 token n'est configuré, le fond utilise `#53ac6a`.
 
 > Les variables `VITE_*` sont intégrées au bundle et visibles dans le navigateur. Ne pas utiliser
-> un token Cider sur un overlay public ou partagé ; pour Docker, reconstruire l'image après chaque
+> un token Cider sur un overlay public ou partagé ; l'adresse IP indiquée doit être joignable depuis
+> l'appareil qui exécute le navigateur OBS. Pour Docker, reconstruire l'image après chaque
 > modification du fichier `.env`.
 
 ## Build & Déploiement

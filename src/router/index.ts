@@ -34,6 +34,11 @@ const router = createRouter({
       component: () => import('@/views/BackgroundFixeView.vue'),
     },
     {
+      path: '/couleur',
+      name: 'couleur',
+      component: () => import('@/views/CouleurView.vue'),
+    },
+    {
       path: '/',
       redirect: '/intro',
     },

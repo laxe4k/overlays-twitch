@@ -45,11 +45,18 @@ interface ColorBucket {
 function resetToDefaultColor() {
   if (pauseResetTimer) clearTimeout(pauseResetTimer)
   pauseResetTimer = undefined
-  currentArtworkUrl = undefined
   artworkRequestId++
   targetR = DEFAULT_COLOR.r
   targetG = DEFAULT_COLOR.g
   targetB = DEFAULT_COLOR.b
+}
+
+function restoreCachedArtworkColor() {
+  if (!currentArtworkUrl) return false
+  const cached = artworkColorCache.get(currentArtworkUrl)
+  if (!cached) return false
+  setTargetColor(...cached)
+  return true
 }
 
 function schedulePauseReset() {
@@ -315,11 +322,8 @@ function applyPlaybackState(value: unknown, socket: Socket) {
   if (isPlaying === true) {
     if (pauseResetTimer) clearTimeout(pauseResetTimer)
     pauseResetTimer = undefined
-    if (
-      previousState !== 'playing' &&
-      !updateColorFromArtwork(value)
-    ) {
-      requestCurrentPlayback(socket)
+    if (previousState !== 'playing' && !updateColorFromArtwork(value)) {
+      if (!restoreCachedArtworkColor()) requestCurrentPlayback(socket)
     }
   }
 }

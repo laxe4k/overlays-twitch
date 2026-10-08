@@ -9,10 +9,14 @@ const backgroundColor = computed(
 )
 
 let animationFrame = 0
+let lastColorFrame = 0
 
-function animateColor() {
-  lerpColor()
+function animateColor(timestamp: number) {
   animationFrame = requestAnimationFrame(animateColor)
+  if (timestamp - lastColorFrame < 1000 / 30) return
+
+  lastColorFrame = timestamp
+  lerpColor()
 }
 
 onMounted(() => {

@@ -68,8 +68,9 @@ npm run dev
 ```
 
 La couleur `artwork.bgColor` est reçue via le flux Socket.IO de Cider (port `10767` par défaut).
-Les couleurs trop sombres sont éclaircies automatiquement ; si Cider est inaccessible ou qu'aucun
-token n'est configuré, le fond utilise `#53ac6a`.
+Au chargement, la page demande aussi l'élément en cours via ce même WebSocket (sans requête HTTP
+inter-origines). Les couleurs trop sombres sont éclaircies automatiquement ; si Cider est
+inaccessible ou qu'aucun token n'est configuré, le fond utilise `#53ac6a`.
 
 > Les variables `VITE_*` sont intégrées au bundle et visibles dans le navigateur. Ne pas utiliser
 > un token Cider sur un overlay public ou partagé ; l'adresse IP indiquée doit être joignable depuis

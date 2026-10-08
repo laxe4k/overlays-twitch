@@ -2,6 +2,7 @@ import { reactive } from 'vue'
 
 const TAU = Math.PI * 2
 const LERP = 0.15
+const FRAME_INTERVAL = 1000 / 30
 const DEFAULT_COLOR = { r: 83 / 255, g: 172 / 255, b: 106 / 255 }
 const MIN_HSL_LIGHTNESS = 0.55
 const ciderQuery = new URLSearchParams(window.location.search)
@@ -138,13 +139,11 @@ function handleCiderMessage(message: string, socket: WebSocket) {
   }
 
   if (message.startsWith('40')) {
-    socket.send(
-      `42${JSON.stringify(['API:Playback', { type: 'playbackStatus.getCurrentItem' }])}`,
-    )
+    requestCurrentPlayback(socket)
     return
   }
 
-  if (message.startsWith('2') && !message.startsWith('42')) {
+  if (message.startsWith('2')) {
     socket.send(`3${message.slice(1)}`)
     return
   }
@@ -163,6 +162,11 @@ function handleCiderMessage(message: string, socket: WebSocket) {
   } catch (error) {
     console.warn('[Cider] Could not parse playback event', error)
   }
+}
+
+function requestCurrentPlayback(socket: WebSocket) {
+  if (socket !== ciderSocket || socket.readyState !== WebSocket.OPEN) return
+  socket.send('42["API:Playback",{"type":"playbackStatus.getCurrentItem"}]')
 }
 
 function connectToCider() {
@@ -266,7 +270,6 @@ interface Emitter {
 }
 
 const SPACING = 10
-const FRAME_INTERVAL = 1000 / 30
 const NUM_EM = 3
 
 // ── Shaders ──

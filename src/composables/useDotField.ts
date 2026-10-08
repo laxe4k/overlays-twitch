@@ -138,11 +138,13 @@ function handleCiderMessage(message: string, socket: WebSocket) {
   }
 
   if (message.startsWith('40')) {
-    void loadCurrentPlaybackState(socket)
+    socket.send(
+      `42${JSON.stringify(['API:Playback', { type: 'playbackStatus.getCurrentItem' }])}`,
+    )
     return
   }
 
-  if (message.startsWith('2')) {
+  if (message.startsWith('2') && !message.startsWith('42')) {
     socket.send(`3${message.slice(1)}`)
     return
   }
@@ -157,58 +159,9 @@ function handleCiderMessage(message: string, socket: WebSocket) {
       return
     }
 
-    if (playbackState === true && !updateColorFromArtwork(packet)) {
-      void loadCurrentArtwork(socket)
-      return
-    }
-
     updateColorFromArtwork(packet)
   } catch (error) {
     console.warn('[Cider] Could not parse playback event', error)
-  }
-}
-
-async function loadCurrentPlaybackState(socket: WebSocket) {
-  try {
-    const response = await fetch(`http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/is-playing`, {
-      headers: { apptoken: CIDER_TOKEN },
-      cache: 'no-store',
-    })
-
-    if (!response.ok) {
-      throw new Error(`Cider returned HTTP ${response.status}`)
-    }
-
-    const data: unknown = await response.json()
-    if (socket !== ciderSocket) return
-
-    const isPlaying = getPlaybackState(data)
-    if (isPlaying === false) resetToDefaultColor()
-    else void loadCurrentArtwork(socket)
-  } catch (error) {
-    console.warn('[Cider] Could not load playback state', error)
-    if (socket === ciderSocket) void loadCurrentArtwork(socket)
-  }
-}
-
-async function loadCurrentArtwork(socket: WebSocket) {
-  try {
-    const response = await fetch(
-      `http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/now-playing`,
-      {
-        headers: { apptoken: CIDER_TOKEN },
-        cache: 'no-store',
-      },
-    )
-
-    if (!response.ok) {
-      throw new Error(`Cider returned HTTP ${response.status}`)
-    }
-
-    const data: unknown = await response.json()
-    if (socket === ciderSocket) updateColorFromArtwork(data)
-  } catch (error) {
-    console.warn('[Cider] Could not load current artwork', error)
   }
 }
 

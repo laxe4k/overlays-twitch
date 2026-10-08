@@ -2,7 +2,7 @@ import { reactive } from 'vue'
 
 const TAU = Math.PI * 2
 const LERP = 0.15
-const MELODY_HUE_API = 'https://melodyhue.com/developer/api/Cr4efK3YTBuiwAeQEEo4VA/color'
+const NOW_PLAYING_API = 'https://nowplaying.axioneer.com/developer/api/Cr4efK3YTBuiwAeQEEo4VA/infos'
 
 const color = reactive({ r: 1, g: 1, b: 1 })
 let targetR = 1,
@@ -11,7 +11,7 @@ let targetR = 1,
 let polling = false
 
 function pollColor() {
-  fetch(MELODY_HUE_API)
+  fetch(NOW_PLAYING_API)
     .then((r) => r.json())
     .then((data) => {
       if (data.color?.hex) {
@@ -30,7 +30,7 @@ export function lerpColor() {
   color.b += (targetB - color.b) * LERP
 }
 
-export function useMelodyHue() {
+export function useNowPlaying() {
   if (!polling) {
     polling = true
     pollColor()
@@ -384,7 +384,7 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
   }
 
   function start() {
-    useMelodyHue()
+    useNowPlaying()
     resize()
     addEventListener('resize', resize)
     rafId = requestAnimationFrame(render)

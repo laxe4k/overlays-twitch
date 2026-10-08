@@ -22,7 +22,7 @@ Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue (ex : `
 - [Vue.js 3](https://vuejs.org/) + TypeScript
 - [Vite](https://vite.dev/)
 - [GSAP](https://gsap.com/) - animations d'entrée du texte
-- [NowPlaying (Axioneer)](https://nowplaying.axioneer.com/) - couleur dynamique du fond
+- [Cider](https://cider.sh/) - couleur dynamique de l'illustration de l'album
 
 ## Structure
 
@@ -53,10 +53,22 @@ Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue (ex : `
 
 ## Développement
 
+Copier `.env.example` vers `.env`, puis renseigner le token généré dans Cider via
+**Connectivity > Manage External Application Access**. L'adresse IP et le port désignent
+l'appareil qui exécute Cider ; pour une connexion locale, garder `127.0.0.1`.
+
 ```sh
 npm install
 npm run dev
 ```
+
+La couleur `artwork.bgColor` est reçue via le flux Socket.IO de Cider (port `10767` par défaut).
+Les couleurs trop sombres sont éclaircies automatiquement ; si Cider est inaccessible ou qu'aucun
+token n'est configuré, le fond utilise `#53ac6a`.
+
+> Les variables `VITE_*` sont intégrées au bundle et visibles dans le navigateur. Ne pas utiliser
+> un token Cider sur un overlay public ou partagé ; pour Docker, reconstruire l'image après chaque
+> modification du fichier `.env`.
 
 ## Build & Déploiement
 

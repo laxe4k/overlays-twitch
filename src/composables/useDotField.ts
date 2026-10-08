@@ -2,26 +2,167 @@ import { reactive } from 'vue'
 
 const TAU = Math.PI * 2
 const LERP = 0.15
-const NOW_PLAYING_API = 'https://nowplaying.axioneer.com/developer/api/Cr4efK3YTBuiwAeQEEo4VA/infos'
+const DEFAULT_COLOR = { r: 83 / 255, g: 172 / 255, b: 106 / 255 }
+const MIN_HSL_LIGHTNESS = 0.55
+const CIDER_IP = import.meta.env.VITE_CIDER_IP?.trim() || '127.0.0.1'
+const CIDER_PORT = Number(import.meta.env.VITE_CIDER_PORT || '10767')
+const CIDER_TOKEN = import.meta.env.VITE_CIDER_TOKEN?.trim() || ''
+const CIDER_RECONNECT_DELAY = 2000
 
-const color = reactive({ r: 1, g: 1, b: 1 })
-let targetR = 1,
-  targetG = 1,
-  targetB = 1
-let polling = false
+const color = reactive({ ...DEFAULT_COLOR })
+let targetR = DEFAULT_COLOR.r
+let targetG = DEFAULT_COLOR.g
+let targetB = DEFAULT_COLOR.b
+let ciderStarted = false
+let ciderSocket: WebSocket | undefined
+let reconnectTimer: ReturnType<typeof setTimeout> | undefined
 
-function pollColor() {
-  fetch(NOW_PLAYING_API)
-    .then((r) => r.json())
-    .then((data) => {
-      if (data.color?.hex) {
-        const h = data.color.hex.replace('#', '')
-        targetR = parseInt(h.substring(0, 2), 16) / 255
-        targetG = parseInt(h.substring(2, 4), 16) / 255
-        targetB = parseInt(h.substring(4, 6), 16) / 255
+function lightenIfTooDark(r: number, g: number, b: number): [number, number, number] {
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const lightness = (max + min) / 2
+
+  if (lightness >= MIN_HSL_LIGHTNESS) return [r, g, b]
+
+  const delta = max - min
+  const saturation =
+    delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1))
+  let hue = 0
+
+  if (delta !== 0) {
+    if (max === r) hue = ((g - b) / delta) % 6
+    else if (max === g) hue = (b - r) / delta + 2
+    else hue = (r - g) / delta + 4
+    hue /= 6
+    if (hue < 0) hue += 1
+  }
+
+  const adjustedLightness = MIN_HSL_LIGHTNESS
+  const chroma = (1 - Math.abs(2 * adjustedLightness - 1)) * saturation
+  const hueSection = hue * 6
+  const secondary = chroma * (1 - Math.abs((hueSection % 2) - 1))
+  const offset = adjustedLightness - chroma / 2
+
+  let adjusted: [number, number, number]
+  if (hueSection < 1) adjusted = [chroma, secondary, 0]
+  else if (hueSection < 2) adjusted = [secondary, chroma, 0]
+  else if (hueSection < 3) adjusted = [0, chroma, secondary]
+  else if (hueSection < 4) adjusted = [0, secondary, chroma]
+  else if (hueSection < 5) adjusted = [secondary, 0, chroma]
+  else adjusted = [chroma, 0, secondary]
+
+  return [adjusted[0] + offset, adjusted[1] + offset, adjusted[2] + offset]
+}
+
+function updateColorFromArtwork(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(updateColorFromArtwork)
+  }
+
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+
+  const artwork = 'artwork' in value ? value.artwork : undefined
+  if (typeof artwork === 'object' && artwork !== null && 'bgColor' in artwork) {
+    const match =
+      typeof artwork.bgColor === 'string' ? /^#?([0-9a-f]{6})$/i.exec(artwork.bgColor) : null
+
+    if (match?.[1]) {
+      const [r, g, b] = lightenIfTooDark(
+        parseInt(match[1].slice(0, 2), 16) / 255,
+        parseInt(match[1].slice(2, 4), 16) / 255,
+        parseInt(match[1].slice(4, 6), 16) / 255,
+      )
+      targetR = r
+      targetG = g
+      targetB = b
+      return true
+    }
+  }
+
+  return Object.values(value).some(updateColorFromArtwork)
+}
+
+function handleCiderMessage(message: string, socket: WebSocket) {
+  if (message.startsWith('0')) {
+    socket.send(`40${JSON.stringify({ apptoken: CIDER_TOKEN })}`)
+    return
+  }
+
+  if (message.startsWith('40')) {
+    void loadCurrentArtwork(socket)
+    return
+  }
+
+  if (message.startsWith('2')) {
+    socket.send(`3${message.slice(1)}`)
+    return
+  }
+
+  if (!message.startsWith('42')) return
+
+  try {
+    const packet: unknown = JSON.parse(message.slice(2))
+    updateColorFromArtwork(packet)
+  } catch (error) {
+    console.warn('[Cider] Could not parse playback event', error)
+  }
+}
+
+async function loadCurrentArtwork(socket: WebSocket) {
+  try {
+    const response = await fetch(
+      `http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/now-playing`,
+      {
+        headers: { apptoken: CIDER_TOKEN },
+        cache: 'no-store',
+      },
+    )
+
+    if (!response.ok) {
+      throw new Error(`Cider returned HTTP ${response.status}`)
+    }
+
+    const data: unknown = await response.json()
+    if (socket === ciderSocket) updateColorFromArtwork(data)
+  } catch (error) {
+    console.warn('[Cider] Could not load current artwork', error)
+  }
+}
+
+function connectToCider() {
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+  reconnectTimer = undefined
+
+  try {
+    const url = new URL(`ws://${CIDER_IP}:${CIDER_PORT}/socket.io/`)
+    url.searchParams.set('EIO', '4')
+    url.searchParams.set('transport', 'websocket')
+    url.searchParams.set('apptoken', CIDER_TOKEN)
+
+    const socket = new WebSocket(url)
+    ciderSocket = socket
+
+    socket.addEventListener('message', (event: MessageEvent<unknown>) => {
+      if (socket === ciderSocket && typeof event.data === 'string') {
+        handleCiderMessage(event.data, socket)
       }
     })
-    .catch(() => {})
+
+    socket.addEventListener('error', () => {
+      console.warn('[Cider] WebSocket connection failed')
+    })
+
+    socket.addEventListener('close', () => {
+      if (socket !== ciderSocket) return
+      ciderSocket = undefined
+      reconnectTimer = setTimeout(connectToCider, CIDER_RECONNECT_DELAY)
+    })
+  } catch (error) {
+    console.warn('[Cider] Could not create WebSocket connection', error)
+    reconnectTimer = setTimeout(connectToCider, CIDER_RECONNECT_DELAY)
+  }
 }
 
 export function lerpColor() {
@@ -30,12 +171,19 @@ export function lerpColor() {
   color.b += (targetB - color.b) * LERP
 }
 
-export function useNowPlaying() {
-  if (!polling) {
-    polling = true
-    pollColor()
-    setInterval(pollColor, 1000)
+export function useCiderArtworkColor() {
+  if (!ciderStarted) {
+    ciderStarted = true
+
+    if (!CIDER_TOKEN) {
+      console.warn('[Cider] Set VITE_CIDER_TOKEN to connect to Cider')
+    } else if (!Number.isInteger(CIDER_PORT) || CIDER_PORT < 1 || CIDER_PORT > 65535) {
+      console.warn('[Cider] VITE_CIDER_PORT must be a valid TCP port')
+    } else {
+      connectToCider()
+    }
   }
+
   return color
 }
 
@@ -384,7 +532,7 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
   }
 
   function start() {
-    useNowPlaying()
+    useCiderArtworkColor()
     resize()
     addEventListener('resize', resize)
     rafId = requestAnimationFrame(render)

@@ -17,11 +17,10 @@ Overlays Vue.js utilisés pour mes lives Twitch via OBS, hébergés sur [overlay
 ## Utilisation
 
 Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue, en **1920×1080**.
-Pour que le navigateur se connecte directement à Cider, ajouter son adresse et son port à chaque
+Le navigateur se connecte directement à Cider. Ajouter son adresse, son port et son token à chaque
 URL, par exemple :
-`https://overlays.laxe4k.com/background?CiderAdress=127.0.0.1&CiderPort=10767`.
-`CiderAddress` (orthographe standard) est aussi accepté. Sans ces paramètres, la configuration
-`VITE_CIDER_IP` et `VITE_CIDER_PORT` du build est utilisée.
+`https://overlays.laxe4k.com/background?CiderAdress=127.0.0.1&CiderPort=10767&CiderToken=VOTRE_TOKEN`.
+`CiderAddress` (orthographe standard) est aussi accepté à la place de `CiderAdress`.
 
 ## Stack
 
@@ -59,27 +58,23 @@ URL, par exemple :
 
 ## Développement
 
-Copier `.env.example` vers `.env`, puis renseigner le token généré dans Cider via
-**Connectivity > Manage External Application Access**. L'adresse IP et le port désignent
-l'appareil qui exécute Cider ; pour une connexion locale, garder `127.0.0.1`.
-
 ```sh
 npm install
 npm run dev
 ```
 
 La couleur `artwork.bgColor` est reçue via le flux Socket.IO de Cider (port `10767` par défaut).
-Au démarrage de la page, une lecture REST unique vérifie l'état de lecture et récupère la couleur
-du morceau en cours ; le WebSocket prend ensuite le relais pour les changements et la pause. Les
-couleurs trop sombres sont éclaircies automatiquement. Si Cider ne fournit pas `artwork.bgColor`,
-la page échantillonne l'image de pochette pour en extraire une couleur dominante (le serveur d'image
-doit autoriser CORS). Si Cider est inaccessible ou qu'aucun token n'est configuré, le fond utilise
-`#53ac6a`.
+Le WebSocket Socket.IO est la source principale : il fournit la couleur au démarrage, lors des
+changements de morceau et à la pause/reprise, avec reconnexion automatique. REST est uniquement
+utilisé en secours si le WebSocket échoue ou ne fournit pas l'état initial dans les 2 secondes.
+Si Cider ne
+fournit pas `artwork.bgColor`, la page échantillonne l'image de pochette (le serveur d'image doit
+autoriser CORS). Les couleurs trop sombres sont éclaircies automatiquement.
 
-> Les variables `VITE_*` sont intégrées au bundle et visibles dans le navigateur. Ne pas utiliser
-> un token Cider sur un overlay public ou partagé ; l'adresse IP indiquée doit être joignable depuis
-> l'appareil qui exécute le navigateur OBS. Pour Docker, reconstruire l'image après chaque
-> modification du fichier `.env`.
+> Le token dans `CiderToken` est visible dans l'URL, l'historique du navigateur et potentiellement
+> les journaux OBS. Utiliser cette URL uniquement dans un navigateur de confiance et révoquer le
+> token s'il a été exposé. L'adresse IP doit être joignable depuis l'appareil qui exécute OBS.
+> Sans connexion valide ou sans token, la couleur par défaut est `#53ac6a`.
 
 ## Build & Déploiement
 

@@ -1,4 +1,5 @@
 import { reactive } from 'vue'
+import { io, type Socket } from 'socket.io-client'
 
 const TAU = Math.PI * 2
 const LERP = 0.15
@@ -6,27 +7,31 @@ const FRAME_INTERVAL = 1000 / 30
 const DEFAULT_COLOR = { r: 83 / 255, g: 172 / 255, b: 106 / 255 }
 const MIN_HSL_LIGHTNESS = 0.55
 const ciderQuery = new URLSearchParams(window.location.search)
-const CIDER_IP =
-  ciderQuery.get('CiderAdress')?.trim() ||
-  ciderQuery.get('CiderAddress')?.trim() ||
-  import.meta.env.VITE_CIDER_IP?.trim() ||
-  '127.0.0.1'
-const CIDER_PORT = Number(
-  ciderQuery.get('CiderPort')?.trim() || import.meta.env.VITE_CIDER_PORT || '10767',
-)
-const CIDER_TOKEN = import.meta.env.VITE_CIDER_TOKEN?.trim() || ''
+const CIDER_IP = ciderQuery.get('CiderAdress')?.trim() || ciderQuery.get('CiderAddress')?.trim() || ''
+const CIDER_PORT = Number(ciderQuery.get('CiderPort')?.trim() || '10767')
+const CIDER_TOKEN = ciderQuery.get('CiderToken')?.trim() || ''
 const CIDER_RECONNECT_DELAY = 2000
+const WS_INITIAL_STATE_TIMEOUT = 2000
+const GET_CURRENT_ITEM_TIMEOUT = 500
+const PAUSE_RESET_DELAY = 2500
 
 const color = reactive({ ...DEFAULT_COLOR })
+const playbackStatus = reactive({
+  state: 'unknown' as 'unknown' | 'playing' | 'paused',
+  trackRevision: 0,
+})
 let targetR = DEFAULT_COLOR.r
 let targetG = DEFAULT_COLOR.g
 let targetB = DEFAULT_COLOR.b
 let ciderStarted = false
-let ciderSocket: WebSocket | undefined
-let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+let ciderSocket: Socket | undefined
 let playbackRevision = 0
+let wsInitialStateTimer: ReturnType<typeof setTimeout> | undefined
+let getCurrentItemTimeout: ReturnType<typeof setTimeout> | undefined
+let pauseResetTimer: ReturnType<typeof setTimeout> | undefined
 let currentArtworkUrl: string | undefined
 let artworkRequestId = 0
+let restSyncInProgress = false
 const artworkColorCache = new Map<string, [number, number, number]>()
 
 interface ColorBucket {
@@ -38,6 +43,8 @@ interface ColorBucket {
 }
 
 function resetToDefaultColor() {
+  if (pauseResetTimer) clearTimeout(pauseResetTimer)
+  pauseResetTimer = undefined
   currentArtworkUrl = undefined
   artworkRequestId++
   targetR = DEFAULT_COLOR.r
@@ -45,7 +52,17 @@ function resetToDefaultColor() {
   targetB = DEFAULT_COLOR.b
 }
 
+function schedulePauseReset() {
+  if (pauseResetTimer) clearTimeout(pauseResetTimer)
+  pauseResetTimer = setTimeout(() => {
+    pauseResetTimer = undefined
+    resetToDefaultColor()
+  }, PAUSE_RESET_DELAY)
+}
+
 function setTargetColor(r: number, g: number, b: number) {
+  if (pauseResetTimer) clearTimeout(pauseResetTimer)
+  pauseResetTimer = undefined
   const [lightR, lightG, lightB] = lightenIfTooDark(r, g, b)
   targetR = lightR
   targetG = lightG
@@ -138,14 +155,19 @@ function getDominantImageColor(image: HTMLImageElement): [number, number, number
 }
 
 function loadColorFromArtworkImage(url: string) {
+  if (pauseResetTimer) clearTimeout(pauseResetTimer)
+  pauseResetTimer = undefined
   if (url === currentArtworkUrl) return
-  currentArtworkUrl = url
-  const requestId = ++artworkRequestId
-  const cachedColor = artworkColorCache.get(url)
-  if (cachedColor) {
-    setTargetColor(...cachedColor)
+
+  if (artworkColorCache.has(url)) {
+    currentArtworkUrl = url
+    const cachedColor = artworkColorCache.get(url)
+    if (cachedColor) setTargetColor(...cachedColor)
     return
   }
+
+  currentArtworkUrl = url
+  const requestId = ++artworkRequestId
 
   const image = new Image()
   image.crossOrigin = 'anonymous'
@@ -162,6 +184,7 @@ function loadColorFromArtworkImage(url: string) {
       artworkColorCache.set(url, sampledColor)
       setTargetColor(...sampledColor)
     } catch (error) {
+      currentArtworkUrl = undefined
       console.warn(
         '[Cider] Could not read the artwork image; check that its server allows CORS',
         error,
@@ -170,6 +193,7 @@ function loadColorFromArtworkImage(url: string) {
   }
   image.onerror = () => {
     if (requestId === artworkRequestId) {
+      currentArtworkUrl = undefined
       console.warn('[Cider] Could not load the artwork image')
     }
   }
@@ -212,6 +236,16 @@ function updateColorFromArtwork(value: unknown): boolean {
 }
 
 function getPlaybackState(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const normalizedValue = value.toLowerCase()
+    if (['playing', 'play'].includes(normalizedValue)) return true
+    if (['paused', 'pause', 'stopped', 'stop', 'ended'].includes(normalizedValue)) {
+      return false
+    }
+    return undefined
+  }
+
   if (Array.isArray(value)) {
     for (const item of value) {
       const state = getPlaybackState(item)
@@ -222,17 +256,36 @@ function getPlaybackState(value: unknown): boolean | undefined {
 
   if (typeof value !== 'object' || value === null) return undefined
 
+  if (
+    'type' in value &&
+    typeof value.type === 'string' &&
+    value.type.endsWith('playbackStateDidChange') &&
+    'data' in value &&
+    typeof value.data === 'string'
+  ) {
+    const state = value.data.toLowerCase()
+    if (['playing', 'play'].includes(state)) return true
+    if (['paused', 'pause'].includes(state)) return false
+  }
+
   for (const [key, item] of Object.entries(value)) {
     const normalizedKey = key.toLowerCase().replace(/[^a-z]/g, '')
 
     if (
-      ['playing', 'isplaying', 'playbackstate', 'state', 'status'].includes(normalizedKey)
+      [
+        'playing',
+        'isplaying',
+        'playbackstate',
+        'currentplaybackstate',
+        'state',
+        'status',
+      ].includes(normalizedKey)
     ) {
       if (typeof item === 'boolean') return item
       if (typeof item === 'string') {
         const normalizedValue = item.toLowerCase()
         if (['playing', 'play'].includes(normalizedValue)) return true
-        if (['paused', 'pause', 'stopped', 'stop', 'ended'].includes(normalizedValue)) {
+        if (['paused', 'pause'].includes(normalizedValue)) {
           return false
         }
       }
@@ -245,40 +298,125 @@ function getPlaybackState(value: unknown): boolean | undefined {
   return undefined
 }
 
-function handleCiderMessage(message: string, socket: WebSocket) {
-  if (message.startsWith('0')) {
-    socket.send(`40${JSON.stringify({ apptoken: CIDER_TOKEN })}`)
+function updatePlaybackStatus(value: unknown): boolean | undefined {
+  const isPlaying = getPlaybackState(value)
+  if (isPlaying !== undefined) playbackStatus.state = isPlaying ? 'playing' : 'paused'
+  return isPlaying
+}
+
+function applyPlaybackState(value: unknown, socket: Socket) {
+  const previousState = playbackStatus.state
+  const isPlaying = updatePlaybackStatus(value)
+
+  if (isPlaying === false) {
+    schedulePauseReset()
     return
   }
-
-  if (message.startsWith('40')) {
-    requestCurrentPlayback(socket)
-    return
-  }
-
-  if (message.startsWith('2')) {
-    socket.send(`3${message.slice(1)}`)
-    return
-  }
-
-  if (!message.startsWith('42')) return
-
-  try {
-    const packet: unknown = JSON.parse(message.slice(2))
-    const playbackState = getPlaybackState(packet)
-    if (playbackState === false) {
-      playbackRevision++
-      resetToDefaultColor()
-      return
+  if (isPlaying === true) {
+    if (pauseResetTimer) clearTimeout(pauseResetTimer)
+    pauseResetTimer = undefined
+    if (
+      previousState !== 'playing' &&
+      !updateColorFromArtwork(value)
+    ) {
+      requestCurrentPlayback(socket)
     }
-
-    if (updateColorFromArtwork(packet)) playbackRevision++
-  } catch (error) {
-    console.warn('[Cider] Could not parse playback event', error)
   }
 }
 
-async function loadStartupColor() {
+function handlePlaybackStateChange(value: unknown, socket: Socket) {
+  playbackRevision++
+  applyPlaybackState(value, socket)
+}
+
+function handleTrackChange(value: unknown) {
+  playbackStatus.trackRevision++
+  playbackRevision++
+  if (pauseResetTimer) clearTimeout(pauseResetTimer)
+  pauseResetTimer = undefined
+  if (!updateColorFromArtwork(value)) {
+    void syncPlaybackFromRest()
+  }
+}
+
+function handleCiderPlayback(payload: unknown, socket: Socket) {
+  try {
+    if (typeof payload === 'object' && payload !== null && 'type' in payload) {
+      const eventType = payload.type
+      const eventData = 'data' in payload ? payload.data : undefined
+      if (typeof eventType === 'string') {
+        if (eventType === 'playbackStatus.playbackTimeDidChange') {
+          applyPlaybackState(eventData, socket)
+          return
+        }
+
+        if (eventType === 'playbackStatus.playbackStateDidChange') {
+          clearWsInitialStateTimer()
+          handlePlaybackStateChange(eventData, socket)
+          return
+        }
+
+        if (eventType === 'playbackStatus.nowPlayingStatusDidChange') {
+          updatePlaybackStatus(eventData)
+          return
+        }
+
+        if (eventType === 'playbackStatus.nowPlayingItemDidChange') {
+          clearWsInitialStateTimer()
+          handleTrackChange(eventData)
+          return
+        }
+
+        if (eventType === 'playbackStatus.getCurrentItem') {
+          clearGetCurrentItemTimeout()
+          clearWsInitialStateTimer()
+          playbackRevision++
+          if (!updateColorFromArtwork(eventData)) {
+            console.warn('[Cider] Current-item response did not include artwork')
+          }
+          return
+        }
+      }
+    }
+
+    updatePlaybackStatus(payload)
+    const playbackState = getPlaybackState(payload)
+    if (playbackState === false) {
+      playbackRevision++
+      schedulePauseReset()
+      return
+    }
+
+    const hasArtwork = updateColorFromArtwork(payload)
+    if (hasArtwork) playbackRevision++
+
+    if (playbackState === true && !hasArtwork) requestCurrentPlayback(socket)
+  } catch (error) {
+    console.warn('[Cider] Could not process playback event', error)
+  }
+}
+
+function clearWsInitialStateTimer() {
+  if (wsInitialStateTimer) clearTimeout(wsInitialStateTimer)
+  wsInitialStateTimer = undefined
+}
+
+function clearGetCurrentItemTimeout() {
+  if (getCurrentItemTimeout) clearTimeout(getCurrentItemTimeout)
+  getCurrentItemTimeout = undefined
+}
+
+function scheduleInitialRestFallback() {
+  clearWsInitialStateTimer()
+  wsInitialStateTimer = setTimeout(() => {
+    wsInitialStateTimer = undefined
+    if (ciderSocket?.connected) void syncPlaybackFromRest(true)
+  }, WS_INITIAL_STATE_TIMEOUT)
+}
+
+async function syncPlaybackFromRest(allowPauseReset = false) {
+  if (restSyncInProgress) return
+  restSyncInProgress = true
   const revisionAtStart = playbackRevision
 
   try {
@@ -290,9 +428,10 @@ async function loadStartupColor() {
 
     const playback: unknown = await response.json()
     if (playbackRevision !== revisionAtStart) return
+    updatePlaybackStatus(playback)
 
     if (getPlaybackState(playback) === false) {
-      resetToDefaultColor()
+      if (allowPauseReset || !ciderSocket?.connected) schedulePauseReset()
       return
     }
 
@@ -306,48 +445,60 @@ async function loadStartupColor() {
     if (!trackResponse.ok) throw new Error(`Cider returned HTTP ${trackResponse.status}`)
 
     const track: unknown = await trackResponse.json()
-    if (playbackRevision === revisionAtStart) updateColorFromArtwork(track)
+    if (playbackRevision === revisionAtStart && !updateColorFromArtwork(track)) {
+      console.warn('[Cider] REST playback response did not include artwork')
+    }
   } catch (error) {
-    console.warn('[Cider] Could not load startup playback state', error)
+    console.warn('[Cider] Could not sync playback via REST', error)
+  } finally {
+    restSyncInProgress = false
   }
 }
 
-function requestCurrentPlayback(socket: WebSocket) {
-  if (socket !== ciderSocket || socket.readyState !== WebSocket.OPEN) return
-  socket.send('42["API:Playback",{"type":"playbackStatus.getCurrentItem"}]')
+function requestCurrentPlayback(socket: Socket) {
+  if (socket !== ciderSocket || !socket.connected) return
+  clearGetCurrentItemTimeout()
+  socket.emit('API:Playback', { type: 'playbackStatus.getCurrentItem' })
+  getCurrentItemTimeout = setTimeout(() => {
+    getCurrentItemTimeout = undefined
+    void syncPlaybackFromRest()
+  }, GET_CURRENT_ITEM_TIMEOUT)
 }
 
 function connectToCider() {
-  if (reconnectTimer) clearTimeout(reconnectTimer)
-  reconnectTimer = undefined
-
   try {
-    const url = new URL(`ws://${CIDER_IP}:${CIDER_PORT}/socket.io/`)
-    url.searchParams.set('EIO', '4')
-    url.searchParams.set('transport', 'websocket')
-    url.searchParams.set('apptoken', CIDER_TOKEN)
-
-    const socket = new WebSocket(url)
+    const socket = io(`http://${CIDER_IP}:${CIDER_PORT}`, {
+      transports: ['websocket'],
+      query: { apptoken: CIDER_TOKEN },
+      auth: { apptoken: CIDER_TOKEN },
+      reconnection: true,
+      reconnectionDelay: CIDER_RECONNECT_DELAY,
+    })
     ciderSocket = socket
 
-    socket.addEventListener('message', (event: MessageEvent<unknown>) => {
-      if (socket === ciderSocket && typeof event.data === 'string') {
-        handleCiderMessage(event.data, socket)
-      }
-    })
-
-    socket.addEventListener('error', () => {
-      console.warn('[Cider] WebSocket connection failed')
-    })
-
-    socket.addEventListener('close', () => {
+    socket.on('connect', () => {
       if (socket !== ciderSocket) return
-      ciderSocket = undefined
-      reconnectTimer = setTimeout(connectToCider, CIDER_RECONNECT_DELAY)
+      console.info('[Cider] Socket.IO connected')
+      requestCurrentPlayback(socket)
+      scheduleInitialRestFallback()
+    })
+
+    socket.on('API:Playback', (payload: unknown) => {
+      if (socket === ciderSocket) handleCiderPlayback(payload, socket)
+    })
+
+    socket.on('connect_error', (error: Error) => {
+      console.warn('[Cider] Socket.IO connection failed', error.message)
+      void syncPlaybackFromRest(true)
+    })
+
+    socket.on('disconnect', (reason: string) => {
+      console.warn('[Cider] Socket.IO disconnected', reason)
+      clearWsInitialStateTimer()
+      void syncPlaybackFromRest(true)
     })
   } catch (error) {
-    console.warn('[Cider] Could not create WebSocket connection', error)
-    reconnectTimer = setTimeout(connectToCider, CIDER_RECONNECT_DELAY)
+    console.warn('[Cider] Could not create Socket.IO connection', error)
   }
 }
 
@@ -361,17 +512,23 @@ export function useCiderArtworkColor() {
   if (!ciderStarted) {
     ciderStarted = true
 
-    if (!CIDER_TOKEN) {
-      console.warn('[Cider] Set VITE_CIDER_TOKEN to connect to Cider')
+    if (!CIDER_IP) {
+      console.warn('[Cider] Set CiderAdress in the page URL')
+    } else if (!CIDER_TOKEN) {
+      console.warn('[Cider] Set CiderToken in the page URL')
     } else if (!Number.isInteger(CIDER_PORT) || CIDER_PORT < 1 || CIDER_PORT > 65535) {
-      console.warn('[Cider] VITE_CIDER_PORT must be a valid TCP port')
+      console.warn('[Cider] CiderPort must be a valid TCP port')
     } else {
       connectToCider()
-      void loadStartupColor()
     }
   }
 
   return color
+}
+
+export function useCiderPlaybackStatus() {
+  useCiderArtworkColor()
+  return playbackStatus
 }
 
 // ── WebGL DotField engine ──

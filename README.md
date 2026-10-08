@@ -16,9 +16,10 @@ Overlays Vue.js utilisés pour mes lives Twitch via OBS, hébergés sur [overlay
 
 ## Utilisation
 
-Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue (ex : `https://overlays.laxe4k.com/intro`), en **1920×1080**.
-L'adresse et le port de Cider peuvent être définis directement dans l'URL, par exemple :
-`https://overlays.laxe4k.com/couleur?CiderAdress=192.168.1.50&CiderPort=10767`.
+Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue, en **1920×1080**.
+Pour que le navigateur se connecte directement à Cider, ajouter son adresse et son port à chaque
+URL, par exemple :
+`https://overlays.laxe4k.com/background?CiderAdress=127.0.0.1&CiderPort=10767`.
 `CiderAddress` (orthographe standard) est aussi accepté. Sans ces paramètres, la configuration
 `VITE_CIDER_IP` et `VITE_CIDER_PORT` du build est utilisée.
 
@@ -68,9 +69,11 @@ npm run dev
 ```
 
 La couleur `artwork.bgColor` est reçue via le flux Socket.IO de Cider (port `10767` par défaut).
-Au chargement, la page demande aussi l'état et l'élément en cours via l'API REST de Cider comme
-secours, en parallèle de la demande WebSocket. Les couleurs trop sombres sont éclaircies
-automatiquement ; si Cider est inaccessible ou qu'aucun token n'est configuré, le fond utilise
+Au démarrage de la page, une lecture REST unique vérifie l'état de lecture et récupère la couleur
+du morceau en cours ; le WebSocket prend ensuite le relais pour les changements et la pause. Les
+couleurs trop sombres sont éclaircies automatiquement. Si Cider ne fournit pas `artwork.bgColor`,
+la page échantillonne l'image de pochette pour en extraire une couleur dominante (le serveur d'image
+doit autoriser CORS). Si Cider est inaccessible ou qu'aucun token n'est configuré, le fond utilise
 `#53ac6a`.
 
 > Les variables `VITE_*` sont intégrées au bundle et visibles dans le navigateur. Ne pas utiliser

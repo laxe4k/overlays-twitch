@@ -24,12 +24,32 @@ let targetB = DEFAULT_COLOR.b
 let ciderStarted = false
 let ciderSocket: WebSocket | undefined
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined
-let playbackEventVersion = 0
+let playbackRevision = 0
+let currentArtworkUrl: string | undefined
+let artworkRequestId = 0
+const artworkColorCache = new Map<string, [number, number, number]>()
+
+interface ColorBucket {
+  count: number
+  r: number
+  g: number
+  b: number
+  score: number
+}
 
 function resetToDefaultColor() {
+  currentArtworkUrl = undefined
+  artworkRequestId++
   targetR = DEFAULT_COLOR.r
   targetG = DEFAULT_COLOR.g
   targetB = DEFAULT_COLOR.b
+}
+
+function setTargetColor(r: number, g: number, b: number) {
+  const [lightR, lightG, lightB] = lightenIfTooDark(r, g, b)
+  targetR = lightR
+  targetG = lightG
+  targetB = lightB
 }
 
 function lightenIfTooDark(r: number, g: number, b: number): [number, number, number] {
@@ -69,6 +89,93 @@ function lightenIfTooDark(r: number, g: number, b: number): [number, number, num
   return [adjusted[0] + offset, adjusted[1] + offset, adjusted[2] + offset]
 }
 
+function getDominantImageColor(image: HTMLImageElement): [number, number, number] | undefined {
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) throw new Error('Canvas 2D context is unavailable')
+
+  const size = 32
+  canvas.width = size
+  canvas.height = size
+  context.drawImage(image, 0, 0, size, size)
+
+  const { data } = context.getImageData(0, 0, size, size)
+  const buckets = new Map<number, ColorBucket>()
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i]! / 255
+    const g = data[i + 1]! / 255
+    const b = data[i + 2]! / 255
+    if (data[i + 3]! < 128) continue
+
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    const lightness = (max + min) / 2
+    if (lightness < 0.06 || lightness > 0.94) continue
+
+    const key = (Math.round(r * 15) << 8) | (Math.round(g * 15) << 4) | Math.round(b * 15)
+    const saturation = max === 0 ? 0 : (max - min) / max
+    const bucket = buckets.get(key) ?? { count: 0, r: 0, g: 0, b: 0, score: 0 }
+    bucket.count++
+    bucket.r += r
+    bucket.g += g
+    bucket.b += b
+    bucket.score += 0.65 + saturation * 0.7
+    buckets.set(key, bucket)
+  }
+
+  let dominant: ColorBucket | undefined
+  for (const bucket of buckets.values()) {
+    if (!dominant || bucket.score > dominant.score) dominant = bucket
+  }
+
+  if (!dominant || dominant.count === 0) return undefined
+  return [
+    dominant.r / dominant.count,
+    dominant.g / dominant.count,
+    dominant.b / dominant.count,
+  ]
+}
+
+function loadColorFromArtworkImage(url: string) {
+  if (url === currentArtworkUrl) return
+  currentArtworkUrl = url
+  const requestId = ++artworkRequestId
+  const cachedColor = artworkColorCache.get(url)
+  if (cachedColor) {
+    setTargetColor(...cachedColor)
+    return
+  }
+
+  const image = new Image()
+  image.crossOrigin = 'anonymous'
+  image.onload = () => {
+    if (requestId !== artworkRequestId) return
+
+    try {
+      const sampledColor = getDominantImageColor(image)
+      if (!sampledColor) {
+        console.warn('[Cider] Could not find a usable color in the artwork')
+        return
+      }
+
+      artworkColorCache.set(url, sampledColor)
+      setTargetColor(...sampledColor)
+    } catch (error) {
+      console.warn(
+        '[Cider] Could not read the artwork image; check that its server allows CORS',
+        error,
+      )
+    }
+  }
+  image.onerror = () => {
+    if (requestId === artworkRequestId) {
+      console.warn('[Cider] Could not load the artwork image')
+    }
+  }
+  image.src = url
+}
+
 function updateColorFromArtwork(value: unknown): boolean {
   if (Array.isArray(value)) {
     return value.some(updateColorFromArtwork)
@@ -79,19 +186,24 @@ function updateColorFromArtwork(value: unknown): boolean {
   }
 
   const artwork = 'artwork' in value ? value.artwork : undefined
-  if (typeof artwork === 'object' && artwork !== null && 'bgColor' in artwork) {
-    const match =
-      typeof artwork.bgColor === 'string' ? /^#?([0-9a-f]{6})$/i.exec(artwork.bgColor) : null
+  if (typeof artwork === 'object' && artwork !== null) {
+    if ('bgColor' in artwork && typeof artwork.bgColor === 'string') {
+      const match = /^#?([0-9a-f]{6})$/i.exec(artwork.bgColor)
+      if (match?.[1]) {
+        currentArtworkUrl =
+          'url' in artwork && typeof artwork.url === 'string' ? artwork.url : undefined
+        artworkRequestId++
+        setTargetColor(
+          parseInt(match[1].slice(0, 2), 16) / 255,
+          parseInt(match[1].slice(2, 4), 16) / 255,
+          parseInt(match[1].slice(4, 6), 16) / 255,
+        )
+        return true
+      }
+    }
 
-    if (match?.[1]) {
-      const [r, g, b] = lightenIfTooDark(
-        parseInt(match[1].slice(0, 2), 16) / 255,
-        parseInt(match[1].slice(2, 4), 16) / 255,
-        parseInt(match[1].slice(4, 6), 16) / 255,
-      )
-      targetR = r
-      targetG = g
-      targetB = b
+    if ('url' in artwork && typeof artwork.url === 'string' && artwork.url.trim()) {
+      loadColorFromArtworkImage(artwork.url)
       return true
     }
   }
@@ -154,70 +266,55 @@ function handleCiderMessage(message: string, socket: WebSocket) {
   try {
     const packet: unknown = JSON.parse(message.slice(2))
     const playbackState = getPlaybackState(packet)
-    const hasArtwork = updateColorFromArtwork(packet)
-
-    if (playbackState !== undefined || hasArtwork) playbackEventVersion++
-
     if (playbackState === false) {
+      playbackRevision++
       resetToDefaultColor()
       return
     }
+
+    if (updateColorFromArtwork(packet)) playbackRevision++
   } catch (error) {
     console.warn('[Cider] Could not parse playback event', error)
+  }
+}
+
+async function loadStartupColor() {
+  const revisionAtStart = playbackRevision
+
+  try {
+    const response = await fetch(`http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/is-playing`, {
+      headers: { apptoken: CIDER_TOKEN },
+      cache: 'no-store',
+    })
+    if (!response.ok) throw new Error(`Cider returned HTTP ${response.status}`)
+
+    const playback: unknown = await response.json()
+    if (playbackRevision !== revisionAtStart) return
+
+    if (getPlaybackState(playback) === false) {
+      resetToDefaultColor()
+      return
+    }
+
+    const trackResponse = await fetch(
+      `http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/now-playing`,
+      {
+        headers: { apptoken: CIDER_TOKEN },
+        cache: 'no-store',
+      },
+    )
+    if (!trackResponse.ok) throw new Error(`Cider returned HTTP ${trackResponse.status}`)
+
+    const track: unknown = await trackResponse.json()
+    if (playbackRevision === revisionAtStart) updateColorFromArtwork(track)
+  } catch (error) {
+    console.warn('[Cider] Could not load startup playback state', error)
   }
 }
 
 function requestCurrentPlayback(socket: WebSocket) {
   if (socket !== ciderSocket || socket.readyState !== WebSocket.OPEN) return
   socket.send('42["API:Playback",{"type":"playbackStatus.getCurrentItem"}]')
-  void loadCurrentPlaybackFromRest(socket)
-}
-
-async function loadCurrentPlaybackFromRest(socket: WebSocket) {
-  const version = playbackEventVersion
-  const headers = { apptoken: CIDER_TOKEN }
-
-  try {
-    const stateResponse = await fetch(
-      `http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/is-playing`,
-      { headers, cache: 'no-store' },
-    )
-
-    if (!stateResponse.ok) {
-      throw new Error(`Cider returned HTTP ${stateResponse.status} for is-playing`)
-    }
-
-    const stateData: unknown = await stateResponse.json()
-    if (socket !== ciderSocket || version !== playbackEventVersion) return
-
-    if (getPlaybackState(stateData) === false) {
-      playbackEventVersion++
-      resetToDefaultColor()
-      return
-    }
-  } catch (error) {
-    console.warn('[Cider] Could not load playback state through REST', error)
-  }
-
-  if (socket !== ciderSocket || version !== playbackEventVersion) return
-
-  try {
-    const artworkResponse = await fetch(
-      `http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/now-playing`,
-      { headers, cache: 'no-store' },
-    )
-
-    if (!artworkResponse.ok) {
-      throw new Error(`Cider returned HTTP ${artworkResponse.status} for now-playing`)
-    }
-
-    const artworkData: unknown = await artworkResponse.json()
-    if (socket === ciderSocket && version === playbackEventVersion) {
-      updateColorFromArtwork(artworkData)
-    }
-  } catch (error) {
-    console.warn('[Cider] Could not load current artwork through REST', error)
-  }
 }
 
 function connectToCider() {
@@ -270,6 +367,7 @@ export function useCiderArtworkColor() {
       console.warn('[Cider] VITE_CIDER_PORT must be a valid TCP port')
     } else {
       connectToCider()
+      void loadStartupColor()
     }
   }
 

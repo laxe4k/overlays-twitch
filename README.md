@@ -86,8 +86,10 @@ En cas d'échec du REST Cider, l'overlay essaie aussi le secours local
 `http://127.0.0.1:5000/now-playing`. Il fournit l'état de lecture Windows et la pochette encodée en
 base64 ; le code `PlaybackStatus` `4` signifie lecture, `5` pause, et `3` arrêt. L'URL du secours
 peut être remplacée avec le paramètre `SMTCBridgeUrl`. SMTC Bridge doit être lancé sur la machine
-qui exécute le navigateur OBS. Cette alternative ne change ni le WebSocket Cider ni son
-authentification.
+qui exécute le navigateur OBS. L'overlay cherche en priorité l'identifiant
+`CiderCollective.Cider_a6qxe093bx5xj!App`, puis une session dont `source_app_id` contient
+`Cider` (sans tenir compte de la casse) ; il n'utilise pas les sessions d'autres applications.
+Cette alternative ne change ni le WebSocket Cider ni son authentification.
 
 > Le token dans `CiderToken` est visible dans l'URL, l'historique du navigateur et potentiellement
 > les journaux OBS. Utiliser cette URL uniquement dans un navigateur de confiance et révoquer le

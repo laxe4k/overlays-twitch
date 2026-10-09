@@ -481,11 +481,18 @@ async function syncPlaybackFromSmtcBridge(
   if (playbackRevision !== revisionAtStart || !isRecord(payload)) return
 
   const sessions = Array.isArray(payload.sessions) ? payload.sessions : []
-  const currentSessionId = payload.current_session_id
   const session =
     sessions.find(
-      (item) => isRecord(item) && item.source_app_id === currentSessionId,
-    ) ?? sessions.find(isRecord)
+      (item) =>
+        isRecord(item) &&
+        item.source_app_id === 'CiderCollective.Cider_a6qxe093bx5xj!App',
+    ) ??
+    sessions.find(
+      (item) =>
+        isRecord(item) &&
+        typeof item.source_app_id === 'string' &&
+        item.source_app_id.toLowerCase().includes('cider'),
+    )
 
   if (!session || !isRecord(session.playback_info)) {
     updatePlaybackStatus(false)

@@ -10,6 +10,8 @@ const ciderQuery = new URLSearchParams(window.location.search)
 const CIDER_IP = ciderQuery.get('CiderAdress')?.trim() || ciderQuery.get('CiderAddress')?.trim() || ''
 const CIDER_PORT = Number(ciderQuery.get('CiderPort')?.trim() || '10767')
 const CIDER_TOKEN = ciderQuery.get('CiderToken')?.trim() || ''
+const SMTC_BRIDGE_URL =
+  ciderQuery.get('SMTCBridgeUrl')?.trim() || 'http://127.0.0.1:5000/now-playing'
 const CIDER_RECONNECT_DELAY = 2000
 const WS_INITIAL_STATE_TIMEOUT = 2000
 const GET_CURRENT_ITEM_TIMEOUT = 500
@@ -454,8 +456,62 @@ async function syncPlaybackFromRest(allowPauseReset = false) {
     }
   } catch (error) {
     console.warn('[Cider] Could not sync playback via REST', error)
+    try {
+      await syncPlaybackFromSmtcBridge(allowPauseReset, revisionAtStart)
+    } catch (bridgeError) {
+      console.warn('[SMTC Bridge] Could not sync playback', bridgeError)
+    }
   } finally {
     restSyncInProgress = false
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+async function syncPlaybackFromSmtcBridge(
+  allowPauseReset: boolean,
+  revisionAtStart: number,
+) {
+  const response = await fetch(SMTC_BRIDGE_URL, { cache: 'no-store' })
+  if (!response.ok) throw new Error(`SMTC Bridge returned HTTP ${response.status}`)
+
+  const payload: unknown = await response.json()
+  if (playbackRevision !== revisionAtStart || !isRecord(payload)) return
+
+  const sessions = Array.isArray(payload.sessions) ? payload.sessions : []
+  const currentSessionId = payload.current_session_id
+  const session =
+    sessions.find(
+      (item) => isRecord(item) && item.source_app_id === currentSessionId,
+    ) ?? sessions.find(isRecord)
+
+  if (!session || !isRecord(session.playback_info)) {
+    updatePlaybackStatus(false)
+    if (allowPauseReset || !ciderSocket?.connected) schedulePauseReset()
+    return
+  }
+
+  const status = session.playback_info.PlaybackStatus
+  if (status !== 4) {
+    if (typeof status === 'number' && [0, 1, 3, 5].includes(status)) {
+      updatePlaybackStatus(false)
+      if (allowPauseReset || !ciderSocket?.connected) schedulePauseReset()
+    }
+    return
+  }
+
+  updatePlaybackStatus(true)
+  const mediaProperties = isRecord(session.media_properties)
+    ? session.media_properties
+    : undefined
+  const thumbnail = mediaProperties?.Thumbnail
+
+  if (typeof thumbnail === 'string' && thumbnail.startsWith('data:image/')) {
+    loadColorFromArtworkImage(thumbnail)
+  } else {
+    console.warn('[SMTC Bridge] Current-item response did not include artwork')
   }
 }
 

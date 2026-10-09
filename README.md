@@ -71,6 +71,24 @@ Si Cider ne
 fournit pas `artwork.bgColor`, la page échantillonne l'image de pochette (le serveur d'image doit
 autoriser CORS). Les couleurs trop sombres sont éclaircies automatiquement.
 
+### REST depuis une page HTTPS
+
+Les appels REST de secours à `/api/v1/playback/is-playing` et `/api/v1/playback/now-playing`
+envoient le token obligatoire dans l'en-tête `apptoken`. Depuis
+`https://overlays.laxe4k.com`, cet en-tête déclenche une prérequête CORS `OPTIONS`. Si la version
+de Cider utilisée répond `404` à cette prérequête, le navigateur bloque ensuite le `GET` : il
+n'existe pas de correctif frontend sûr qui conserve l'authentification et permette de lire la
+réponse. L'API v2 documentée actuellement par Cider conserve également l'en-tête `apptoken` et ne
+supprime donc pas cette prérequête.
+
+En cas d'échec du REST Cider, l'overlay essaie aussi le secours local
+[SMTC Bridge](https://github.com/nuttylmao/smtc-bridge) sur
+`http://127.0.0.1:5000/now-playing`. Il fournit l'état de lecture Windows et la pochette encodée en
+base64 ; le code `PlaybackStatus` `4` signifie lecture, `5` pause, et `3` arrêt. L'URL du secours
+peut être remplacée avec le paramètre `SMTCBridgeUrl`. SMTC Bridge doit être lancé sur la machine
+qui exécute le navigateur OBS. Cette alternative ne change ni le WebSocket Cider ni son
+authentification.
+
 > Le token dans `CiderToken` est visible dans l'URL, l'historique du navigateur et potentiellement
 > les journaux OBS. Utiliser cette URL uniquement dans un navigateur de confiance et révoquer le
 > token s'il a été exposé. L'adresse IP doit être joignable depuis l'appareil qui exécute OBS.

@@ -87,3 +87,7 @@ Déployé via Docker sur [Dokploy](https://dokploy.com/) :
 ```sh
 docker compose up -d
 ```
+
+Le port HTTP `20169` de l'hôte est publié vers le port `80` du conteneur. Dans OBS, utiliser
+`http://<adresse-du-serveur>:20169/<route>` (par exemple `http://<adresse-du-serveur>:20169/intro`).
+Vérifier également que le pare-feu et, si nécessaire, le routeur autorisent le port TCP `20169`.

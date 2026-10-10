@@ -1,21 +1,18 @@
 import { reactive } from 'vue'
-import { io, type Socket } from 'socket.io-client'
 
 const TAU = Math.PI * 2
 const LERP = 0.15
 const FRAME_INTERVAL = 1000 / 30
 const DEFAULT_COLOR = { r: 83 / 255, g: 172 / 255, b: 106 / 255 }
 const MIN_HSL_LIGHTNESS = 0.55
-const ciderQuery = new URLSearchParams(window.location.search)
-const CIDER_IP = ciderQuery.get('CiderAdress')?.trim() || ciderQuery.get('CiderAddress')?.trim() || ''
-const CIDER_PORT = Number(ciderQuery.get('CiderPort')?.trim() || '10767')
-const CIDER_TOKEN = ciderQuery.get('CiderToken')?.trim() || ''
-const SMTC_BRIDGE_URL =
-  ciderQuery.get('SMTCBridgeUrl')?.trim() || 'http://127.0.0.1:5000/now-playing'
-const CIDER_RECONNECT_DELAY = 2000
-const WS_INITIAL_STATE_TIMEOUT = 2000
-const GET_CURRENT_ITEM_TIMEOUT = 500
-const ARTWORK_COLOR_FALLBACK_DELAY = 500
+const query = new URLSearchParams(window.location.search)
+const SMTC_BRIDGE_URL = query.get('SMTCBridgeUrl')?.trim() || 'http://127.0.0.1:5000/now-playing'
+const EXCLUDED_APPLICATIONS = query
+  .getAll('excludedApplications')
+  .flatMap((value) => value.split(','))
+  .map((value) => value.trim().toLowerCase())
+  .filter(Boolean)
+const SMTC_BRIDGE_POLL_INTERVAL = 1000
 const PAUSE_RESET_DELAY = 2500
 
 const color = reactive({ ...DEFAULT_COLOR })
@@ -26,48 +23,32 @@ const playbackStatus = reactive({
 let targetR = DEFAULT_COLOR.r
 let targetG = DEFAULT_COLOR.g
 let targetB = DEFAULT_COLOR.b
-let ciderStarted = false
-let ciderSocket: Socket | undefined
-let playbackRevision = 0
-let wsInitialStateTimer: ReturnType<typeof setTimeout> | undefined
-let getCurrentItemTimeout: ReturnType<typeof setTimeout> | undefined
+let playbackStarted = false
+let bridgePollInProgress = false
 let pauseResetTimer: ReturnType<typeof setTimeout> | undefined
 let currentArtworkUrl: string | undefined
 let artworkRequestId = 0
-let artworkFallbackTimer: ReturnType<typeof setTimeout> | undefined
-let pendingArtworkUrl: string | undefined
-let restSyncInProgress = false
-const artworkColorCache = new Map<string, [number, number, number]>()
 
 interface ColorBucket {
   count: number
   r: number
   g: number
   b: number
-  score: number
+  saturation: number
 }
 
 function resetToDefaultColor() {
   if (pauseResetTimer) clearTimeout(pauseResetTimer)
   pauseResetTimer = undefined
-  cancelArtworkImageFallback()
   artworkRequestId++
+  currentArtworkUrl = undefined
   targetR = DEFAULT_COLOR.r
   targetG = DEFAULT_COLOR.g
   targetB = DEFAULT_COLOR.b
 }
 
-function restoreCachedArtworkColor() {
-  if (!currentArtworkUrl) return false
-  const cached = artworkColorCache.get(currentArtworkUrl)
-  if (!cached) return false
-  setTargetColor(...cached)
-  return true
-}
-
 function schedulePauseReset() {
-  if (pauseResetTimer) clearTimeout(pauseResetTimer)
-  cancelArtworkImageFallback()
+  if (pauseResetTimer) return
   pauseResetTimer = setTimeout(() => {
     pauseResetTimer = undefined
     resetToDefaultColor()
@@ -91,8 +72,7 @@ function lightenIfTooDark(r: number, g: number, b: number): [number, number, num
   if (lightness >= MIN_HSL_LIGHTNESS) return [r, g, b]
 
   const delta = max - min
-  const saturation =
-    delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1))
+  const saturation = delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1))
   let hue = 0
 
   if (delta !== 0) {
@@ -125,511 +105,199 @@ function getDominantImageColor(image: HTMLImageElement): [number, number, number
   const context = canvas.getContext('2d', { willReadFrequently: true })
   if (!context) throw new Error('Canvas 2D context is unavailable')
 
-  const size = 32
+  const size = 100
   canvas.width = size
   canvas.height = size
   context.drawImage(image, 0, 0, size, size)
 
   const { data } = context.getImageData(0, 0, size, size)
   const buckets = new Map<number, ColorBucket>()
+  const pixels: [number, number, number][] = []
 
   for (let i = 0; i < data.length; i += 4) {
-    const r = data[i]! / 255
-    const g = data[i + 1]! / 255
-    const b = data[i + 2]! / 255
+    const r = data[i]!
+    const g = data[i + 1]!
+    const b = data[i + 2]!
     if (data[i + 3]! < 128) continue
+    if ((r + g + b) / 3 <= 30) continue
 
+    pixels.push([r, g, b])
     const max = Math.max(r, g, b)
     const min = Math.min(r, g, b)
-    const lightness = (max + min) / 2
-    if (lightness < 0.06 || lightness > 0.94) continue
-
-    const key = (Math.round(r * 15) << 8) | (Math.round(g * 15) << 4) | Math.round(b * 15)
     const saturation = max === 0 ? 0 : (max - min) / max
-    const bucket = buckets.get(key) ?? { count: 0, r: 0, g: 0, b: 0, score: 0 }
+    if (saturation < 0.2) continue
+
+    const key = (Math.floor(r / 20) << 16) | (Math.floor(g / 20) << 8) | Math.floor(b / 20)
+    const bucket = buckets.get(key) ?? { count: 0, r: 0, g: 0, b: 0, saturation: 0 }
     bucket.count++
     bucket.r += r
     bucket.g += g
     bucket.b += b
-    bucket.score += 0.65 + saturation * 0.7
+    bucket.saturation += saturation
     buckets.set(key, bucket)
   }
 
+  const eligiblePixels = pixels.length
+    ? pixels
+    : Array.from({ length: data.length / 4 }, (_, i) => {
+        const offset = i * 4
+        return [data[offset]!, data[offset + 1]!, data[offset + 2]!] as [number, number, number]
+      })
   let dominant: ColorBucket | undefined
+  let dominantScore = 0
   for (const bucket of buckets.values()) {
-    if (!dominant || bucket.score > dominant.score) dominant = bucket
+    const averageSaturation = bucket.saturation / bucket.count
+    const score = (bucket.count / eligiblePixels.length) * 0.7 + averageSaturation * 0.3
+    if (score > dominantScore) {
+      dominant = bucket
+      dominantScore = score
+    }
   }
 
-  if (!dominant || dominant.count === 0) return undefined
-  return [
-    dominant.r / dominant.count,
-    dominant.g / dominant.count,
-    dominant.b / dominant.count,
+  let rgb: [number, number, number]
+  if (dominant && dominant.count > 0) {
+    rgb = [dominant.r / dominant.count, dominant.g / dominant.count, dominant.b / dominant.count]
+  } else {
+    rgb = eligiblePixels.reduce(
+      (brightest, pixel) =>
+        pixel[0] + pixel[1] + pixel[2] > brightest[0] + brightest[1] + brightest[2]
+          ? pixel
+          : brightest,
+      eligiblePixels[0]!,
+    )
+  }
+
+  const max = Math.max(...rgb)
+  const min = Math.min(...rgb)
+  const saturation = max === 0 ? 0 : (max - min) / max
+  const boost = saturation > 0.7 ? 1.1 : saturation > 0.4 ? 1.2 : 1.4
+  const center = (rgb[0] + rgb[1] + rgb[2]) / 3
+  rgb = rgb.map((channel) => Math.max(0, Math.min(255, center + (channel - center) * boost))) as [
+    number,
+    number,
+    number,
   ]
+
+  const brightness = (rgb[0] + rgb[1] + rgb[2]) / 3
+  if (brightness < 120) {
+    const brightnessBoost = (120 - brightness) * 0.8
+    rgb = rgb.map((channel) => Math.min(255, channel + brightnessBoost)) as [number, number, number]
+  }
+  return rgb.map((channel) => channel / 255) as [number, number, number]
 }
 
 function loadColorFromArtworkImage(url: string) {
+  if (url === currentArtworkUrl) return
   if (pauseResetTimer) clearTimeout(pauseResetTimer)
   pauseResetTimer = undefined
-  if (url === currentArtworkUrl) return
-
-  if (artworkColorCache.has(url)) {
-    currentArtworkUrl = url
-    const cachedColor = artworkColorCache.get(url)
-    if (cachedColor) setTargetColor(...cachedColor)
-    return
-  }
 
   currentArtworkUrl = url
   const requestId = ++artworkRequestId
 
   const image = new Image()
-  image.crossOrigin = 'anonymous'
   image.onload = () => {
     if (requestId !== artworkRequestId) return
 
     try {
       const sampledColor = getDominantImageColor(image)
       if (!sampledColor) {
-        console.warn('[Cider] Could not find a usable color in the artwork')
+        console.warn('[SMTC Bridge] Could not find a usable color in the artwork')
         return
       }
 
-      artworkColorCache.set(url, sampledColor)
       setTargetColor(...sampledColor)
     } catch (error) {
       currentArtworkUrl = undefined
-      console.warn(
-        '[Cider] Could not read the artwork image; check that its server allows CORS',
-        error,
-      )
+      console.warn('[SMTC Bridge] Could not extract a color from the artwork image', error)
     }
   }
   image.onerror = () => {
     if (requestId === artworkRequestId) {
       currentArtworkUrl = undefined
-      console.warn('[Cider] Could not load the artwork image')
+      console.warn('[SMTC Bridge] Could not load the artwork image')
     }
   }
   image.src = url
-}
-
-function cancelArtworkImageFallback() {
-  if (artworkFallbackTimer) clearTimeout(artworkFallbackTimer)
-  artworkFallbackTimer = undefined
-  pendingArtworkUrl = undefined
-}
-
-function scheduleArtworkImageFallback(url: string) {
-  if (url === currentArtworkUrl || url === pendingArtworkUrl) return
-
-  cancelArtworkImageFallback()
-  artworkRequestId++
-  pendingArtworkUrl = url
-  artworkFallbackTimer = setTimeout(() => {
-    artworkFallbackTimer = undefined
-    pendingArtworkUrl = undefined
-    loadColorFromArtworkImage(url)
-  }, ARTWORK_COLOR_FALLBACK_DELAY)
-}
-
-function findArtworkWithBgColor(
-  value: unknown,
-): { color: string; url?: string } | undefined {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const result = findArtworkWithBgColor(item)
-      if (result) return result
-    }
-    return undefined
-  }
-
-  if (!isRecord(value)) return undefined
-
-  const artwork = value.artwork
-  if (isRecord(artwork) && typeof artwork.bgColor === 'string') {
-    const match = /^#?([0-9a-f]{6})$/i.exec(artwork.bgColor)
-    if (match?.[1]) {
-      return {
-        color: match[1],
-        url: typeof artwork.url === 'string' ? artwork.url : undefined,
-      }
-    }
-  }
-
-  for (const item of Object.values(value)) {
-    const result = findArtworkWithBgColor(item)
-    if (result) return result
-  }
-  return undefined
-}
-
-function findArtworkUrl(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const url = findArtworkUrl(item)
-      if (url) return url
-    }
-    return undefined
-  }
-
-  if (!isRecord(value)) return undefined
-
-  const artwork = value.artwork
-  if (isRecord(artwork) && typeof artwork.url === 'string' && artwork.url.trim()) {
-    return artwork.url.trim()
-  }
-
-  for (const item of Object.values(value)) {
-    const url = findArtworkUrl(item)
-    if (url) return url
-  }
-  return undefined
-}
-
-function updateColorFromArtwork(value: unknown): boolean {
-  const artworkWithColor = findArtworkWithBgColor(value)
-  if (artworkWithColor) {
-    cancelArtworkImageFallback()
-    currentArtworkUrl = artworkWithColor.url
-    artworkRequestId++
-    setTargetColor(
-      parseInt(artworkWithColor.color.slice(0, 2), 16) / 255,
-      parseInt(artworkWithColor.color.slice(2, 4), 16) / 255,
-      parseInt(artworkWithColor.color.slice(4, 6), 16) / 255,
-    )
-    return true
-  }
-
-  const artworkUrl = findArtworkUrl(value)
-  if (!artworkUrl) return false
-
-  scheduleArtworkImageFallback(artworkUrl)
-  return true
-}
-
-function getPlaybackState(value: unknown): boolean | undefined {
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'string') {
-    const normalizedValue = value.toLowerCase()
-    if (['playing', 'play'].includes(normalizedValue)) return true
-    if (['paused', 'pause', 'stopped', 'stop', 'ended'].includes(normalizedValue)) {
-      return false
-    }
-    return undefined
-  }
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const state = getPlaybackState(item)
-      if (state !== undefined) return state
-    }
-    return undefined
-  }
-
-  if (typeof value !== 'object' || value === null) return undefined
-
-  if (
-    'type' in value &&
-    typeof value.type === 'string' &&
-    value.type.endsWith('playbackStateDidChange') &&
-    'data' in value &&
-    typeof value.data === 'string'
-  ) {
-    const state = value.data.toLowerCase()
-    if (['playing', 'play'].includes(state)) return true
-    if (['paused', 'pause'].includes(state)) return false
-  }
-
-  for (const [key, item] of Object.entries(value)) {
-    const normalizedKey = key.toLowerCase().replace(/[^a-z]/g, '')
-
-    if (
-      [
-        'playing',
-        'isplaying',
-        'playbackstate',
-        'currentplaybackstate',
-        'state',
-        'status',
-      ].includes(normalizedKey)
-    ) {
-      if (typeof item === 'boolean') return item
-      if (typeof item === 'string') {
-        const normalizedValue = item.toLowerCase()
-        if (['playing', 'play'].includes(normalizedValue)) return true
-        if (['paused', 'pause'].includes(normalizedValue)) {
-          return false
-        }
-      }
-    }
-
-    const nestedState = getPlaybackState(item)
-    if (nestedState !== undefined) return nestedState
-  }
-
-  return undefined
-}
-
-function updatePlaybackStatus(value: unknown): boolean | undefined {
-  const isPlaying = getPlaybackState(value)
-  if (isPlaying !== undefined) playbackStatus.state = isPlaying ? 'playing' : 'paused'
-  return isPlaying
-}
-
-function applyPlaybackState(value: unknown, socket: Socket) {
-  const previousState = playbackStatus.state
-  const isPlaying = updatePlaybackStatus(value)
-
-  if (isPlaying === false) {
-    schedulePauseReset()
-    return
-  }
-  if (isPlaying === true) {
-    if (pauseResetTimer) clearTimeout(pauseResetTimer)
-    pauseResetTimer = undefined
-    if (previousState !== 'playing' && !updateColorFromArtwork(value)) {
-      if (!restoreCachedArtworkColor()) requestCurrentPlayback(socket)
-    }
-  }
-}
-
-function handlePlaybackStateChange(value: unknown, socket: Socket) {
-  playbackRevision++
-  applyPlaybackState(value, socket)
-}
-
-function handleTrackChange(value: unknown) {
-  playbackStatus.trackRevision++
-  playbackRevision++
-  if (pauseResetTimer) clearTimeout(pauseResetTimer)
-  pauseResetTimer = undefined
-  if (!updateColorFromArtwork(value)) {
-    void syncPlaybackFromRest()
-  }
-}
-
-function handleCiderPlayback(payload: unknown, socket: Socket) {
-  try {
-    if (typeof payload === 'object' && payload !== null && 'type' in payload) {
-      const eventType = payload.type
-      const eventData = 'data' in payload ? payload.data : undefined
-      if (typeof eventType === 'string') {
-        if (eventType === 'playbackStatus.playbackTimeDidChange') {
-          applyPlaybackState(eventData, socket)
-          return
-        }
-
-        if (eventType === 'playbackStatus.playbackStateDidChange') {
-          clearWsInitialStateTimer()
-          handlePlaybackStateChange(eventData, socket)
-          return
-        }
-
-        if (eventType === 'playbackStatus.nowPlayingStatusDidChange') {
-          updatePlaybackStatus(eventData)
-          return
-        }
-
-        if (eventType === 'playbackStatus.nowPlayingItemDidChange') {
-          clearWsInitialStateTimer()
-          handleTrackChange(eventData)
-          return
-        }
-
-        if (eventType === 'playbackStatus.getCurrentItem') {
-          clearGetCurrentItemTimeout()
-          clearWsInitialStateTimer()
-          playbackRevision++
-          if (!updateColorFromArtwork(eventData)) {
-            console.warn('[Cider] Current-item response did not include artwork')
-          }
-          return
-        }
-      }
-    }
-
-    updatePlaybackStatus(payload)
-    const playbackState = getPlaybackState(payload)
-    if (playbackState === false) {
-      playbackRevision++
-      schedulePauseReset()
-      return
-    }
-
-    const hasArtwork = updateColorFromArtwork(payload)
-    if (hasArtwork) playbackRevision++
-
-    if (playbackState === true && !hasArtwork) requestCurrentPlayback(socket)
-  } catch (error) {
-    console.warn('[Cider] Could not process playback event', error)
-  }
-}
-
-function clearWsInitialStateTimer() {
-  if (wsInitialStateTimer) clearTimeout(wsInitialStateTimer)
-  wsInitialStateTimer = undefined
-}
-
-function clearGetCurrentItemTimeout() {
-  if (getCurrentItemTimeout) clearTimeout(getCurrentItemTimeout)
-  getCurrentItemTimeout = undefined
-}
-
-function scheduleInitialRestFallback() {
-  clearWsInitialStateTimer()
-  wsInitialStateTimer = setTimeout(() => {
-    wsInitialStateTimer = undefined
-    if (ciderSocket?.connected) void syncPlaybackFromRest(true)
-  }, WS_INITIAL_STATE_TIMEOUT)
-}
-
-async function syncPlaybackFromRest(allowPauseReset = false) {
-  if (restSyncInProgress) return
-  restSyncInProgress = true
-  const revisionAtStart = playbackRevision
-
-  try {
-    const response = await fetch(`http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/is-playing`, {
-      headers: { apptoken: CIDER_TOKEN },
-      cache: 'no-store',
-    })
-    if (!response.ok) throw new Error(`Cider returned HTTP ${response.status}`)
-
-    const playback: unknown = await response.json()
-    if (playbackRevision !== revisionAtStart) return
-    updatePlaybackStatus(playback)
-
-    if (getPlaybackState(playback) === false) {
-      if (allowPauseReset || !ciderSocket?.connected) schedulePauseReset()
-      return
-    }
-
-    const trackResponse = await fetch(
-      `http://${CIDER_IP}:${CIDER_PORT}/api/v1/playback/now-playing`,
-      {
-        headers: { apptoken: CIDER_TOKEN },
-        cache: 'no-store',
-      },
-    )
-    if (!trackResponse.ok) throw new Error(`Cider returned HTTP ${trackResponse.status}`)
-
-    const track: unknown = await trackResponse.json()
-    if (playbackRevision === revisionAtStart && !updateColorFromArtwork(track)) {
-      console.warn('[Cider] REST playback response did not include artwork')
-    }
-  } catch (error) {
-    console.warn('[Cider] Could not sync playback via REST', error)
-    try {
-      await syncPlaybackFromSmtcBridge(allowPauseReset, revisionAtStart)
-    } catch (bridgeError) {
-      console.warn('[SMTC Bridge] Could not sync playback', bridgeError)
-    }
-  } finally {
-    restSyncInProgress = false
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-async function syncPlaybackFromSmtcBridge(
-  allowPauseReset: boolean,
-  revisionAtStart: number,
-) {
-  const response = await fetch(SMTC_BRIDGE_URL, { cache: 'no-store' })
-  if (!response.ok) throw new Error(`SMTC Bridge returned HTTP ${response.status}`)
-
-  const payload: unknown = await response.json()
-  if (playbackRevision !== revisionAtStart || !isRecord(payload)) return
-
-  const sessions = Array.isArray(payload.sessions) ? payload.sessions : []
-  const session =
-    sessions.find(
-      (item) =>
-        isRecord(item) &&
-        item.source_app_id === 'CiderCollective.Cider_a6qxe093bx5xj!App',
-    ) ??
-    sessions.find(
-      (item) =>
-        isRecord(item) &&
-        typeof item.source_app_id === 'string' &&
-        item.source_app_id.toLowerCase().includes('cider'),
-    )
-
-  if (!session || !isRecord(session.playback_info)) {
-    updatePlaybackStatus(false)
-    if (allowPauseReset || !ciderSocket?.connected) schedulePauseReset()
-    return
-  }
-
+function getSessionStatus(session: Record<string, unknown>): number | undefined {
+  if (!isRecord(session.playback_info)) return undefined
   const status = session.playback_info.PlaybackStatus
-  if (status !== 4) {
-    if (typeof status === 'number' && [0, 1, 3, 5].includes(status)) {
-      updatePlaybackStatus(false)
-      if (allowPauseReset || !ciderSocket?.connected) schedulePauseReset()
-    }
-    return
-  }
-
-  updatePlaybackStatus(true)
-  const mediaProperties = isRecord(session.media_properties)
-    ? session.media_properties
-    : undefined
-  const thumbnail = mediaProperties?.Thumbnail
-
-  if (typeof thumbnail === 'string' && thumbnail.startsWith('data:image/')) {
-    loadColorFromArtworkImage(thumbnail)
-  } else {
-    console.warn('[SMTC Bridge] Current-item response did not include artwork')
-  }
+  return typeof status === 'number' ? status : undefined
 }
 
-function requestCurrentPlayback(socket: Socket) {
-  if (socket !== ciderSocket || !socket.connected) return
-  clearGetCurrentItemTimeout()
-  socket.emit('API:Playback', { type: 'playbackStatus.getCurrentItem' })
-  getCurrentItemTimeout = setTimeout(() => {
-    getCurrentItemTimeout = undefined
-    void syncPlaybackFromRest()
-  }, GET_CURRENT_ITEM_TIMEOUT)
+function hasSessionArtwork(session: Record<string, unknown>): boolean {
+  if (!isRecord(session.media_properties)) return false
+  const thumbnail = session.media_properties.Thumbnail
+  return typeof thumbnail === 'string' && thumbnail.startsWith('data:image/')
 }
 
-function connectToCider() {
+function isExcludedApplication(session: Record<string, unknown>): boolean {
+  if (typeof session.source_app_id !== 'string') return false
+  const sourceAppId = session.source_app_id.toLowerCase()
+  return EXCLUDED_APPLICATIONS.some((application) => sourceAppId.includes(application))
+}
+
+async function syncPlaybackFromSmtcBridge() {
+  if (bridgePollInProgress) return
+  bridgePollInProgress = true
+
   try {
-    const socket = io(`http://${CIDER_IP}:${CIDER_PORT}`, {
-      transports: ['websocket'],
-      query: { apptoken: CIDER_TOKEN },
-      auth: { apptoken: CIDER_TOKEN },
-      reconnection: true,
-      reconnectionDelay: CIDER_RECONNECT_DELAY,
-    })
-    ciderSocket = socket
+    const response = await fetch(SMTC_BRIDGE_URL, { cache: 'no-store' })
+    if (!response.ok) throw new Error(`SMTC Bridge returned HTTP ${response.status}`)
 
-    socket.on('connect', () => {
-      if (socket !== ciderSocket) return
-      console.info('[Cider] Socket.IO connected')
-      requestCurrentPlayback(socket)
-      scheduleInitialRestFallback()
-    })
+    const payload: unknown = await response.json()
+    if (!isRecord(payload)) throw new Error('SMTC Bridge returned an invalid response')
 
-    socket.on('API:Playback', (payload: unknown) => {
-      if (socket === ciderSocket) handleCiderPlayback(payload, socket)
-    })
+    const sessions = Array.isArray(payload.sessions) ? payload.sessions : []
+    const validSessions = sessions.filter(
+      (session): session is Record<string, unknown> =>
+        isRecord(session) && !isExcludedApplication(session),
+    )
+    const currentSessionId = payload.current_session_id
+    const currentSession =
+      typeof currentSessionId === 'string'
+        ? validSessions.find((session) => session.source_app_id === currentSessionId)
+        : undefined
+    const session =
+      currentSession ??
+      validSessions.find((item) => getSessionStatus(item) === 4 && hasSessionArtwork(item)) ??
+      validSessions.find(hasSessionArtwork)
 
-    socket.on('connect_error', (error: Error) => {
-      console.warn('[Cider] Socket.IO connection failed', error.message)
-      void syncPlaybackFromRest(true)
-    })
+    if (!session) {
+      playbackStatus.state = 'paused'
+      schedulePauseReset()
+      return
+    }
 
-    socket.on('disconnect', (reason: string) => {
-      console.warn('[Cider] Socket.IO disconnected', reason)
-      clearWsInitialStateTimer()
-      void syncPlaybackFromRest(true)
-    })
+    const status = getSessionStatus(session)
+    if (status === 4) {
+      playbackStatus.state = 'playing'
+      if (pauseResetTimer) clearTimeout(pauseResetTimer)
+      pauseResetTimer = undefined
+    } else if (status !== undefined && [0, 1, 3, 5].includes(status)) {
+      playbackStatus.state = 'paused'
+      schedulePauseReset()
+    }
+
+    const mediaProperties = isRecord(session.media_properties)
+      ? session.media_properties
+      : undefined
+    const thumbnail = mediaProperties?.Thumbnail
+    if (status === 4 && typeof thumbnail === 'string' && thumbnail.startsWith('data:image/')) {
+      if (thumbnail !== currentArtworkUrl) playbackStatus.trackRevision++
+      loadColorFromArtworkImage(thumbnail)
+    } else if (status === 4) {
+      console.warn('[SMTC Bridge] Current session did not include artwork')
+    }
   } catch (error) {
-    console.warn('[Cider] Could not create Socket.IO connection', error)
+    console.warn('[SMTC Bridge] Could not sync playback', error)
+  } finally {
+    bridgePollInProgress = false
   }
 }
 
@@ -639,26 +307,20 @@ export function lerpColor() {
   color.b += (targetB - color.b) * LERP
 }
 
-export function useCiderArtworkColor() {
-  if (!ciderStarted) {
-    ciderStarted = true
-
-    if (!CIDER_IP) {
-      console.warn('[Cider] Set CiderAdress in the page URL')
-    } else if (!CIDER_TOKEN) {
-      console.warn('[Cider] Set CiderToken in the page URL')
-    } else if (!Number.isInteger(CIDER_PORT) || CIDER_PORT < 1 || CIDER_PORT > 65535) {
-      console.warn('[Cider] CiderPort must be a valid TCP port')
-    } else {
-      connectToCider()
-    }
+export function useSmtcArtworkColor() {
+  if (!playbackStarted) {
+    playbackStarted = true
+    void syncPlaybackFromSmtcBridge()
+    setInterval(() => {
+      void syncPlaybackFromSmtcBridge()
+    }, SMTC_BRIDGE_POLL_INTERVAL)
   }
 
   return color
 }
 
-export function useCiderPlaybackStatus() {
-  useCiderArtworkColor()
+export function useSmtcPlaybackStatus() {
+  useSmtcArtworkColor()
   return playbackStatus
 }
 
@@ -1006,7 +668,7 @@ export function createDotFieldEngine(canvas: HTMLCanvasElement) {
   }
 
   function start() {
-    useCiderArtworkColor()
+    useSmtcArtworkColor()
     resize()
     addEventListener('resize', resize)
     rafId = requestAnimationFrame(render)

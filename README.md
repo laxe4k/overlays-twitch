@@ -4,30 +4,36 @@ Overlays Vue.js utilisés pour mes lives Twitch via OBS, hébergés sur [overlay
 
 ## Pages
 
-| Route | Description |
-|-------|-------------|
-| `/intro` | Écran d'intro avec compte à rebours |
-| `/pause` | Écran de pause |
-| `/outro` | Écran de fin de stream |
-| `/offline` | Écran hors-ligne |
-| `/background` | Fond animé (sans texte) |
-| `/background-fixe` | Fond figé après chargement de la couleur |
-| `/couleur` | Couleur Cider en aplat plein écran |
+| Route              | Description                                 |
+| ------------------ | ------------------------------------------- |
+| `/intro`           | Écran d'intro avec compte à rebours         |
+| `/pause`           | Écran de pause                              |
+| `/outro`           | Écran de fin de stream                      |
+| `/offline`         | Écran hors-ligne                            |
+| `/background`      | Fond animé (sans texte)                     |
+| `/background-fixe` | Fond figé après chargement de la couleur    |
+| `/couleur`         | Couleur de la pochette en aplat plein écran |
 
 ## Utilisation
 
 Ajouter une **source Navigateur** dans OBS avec l'URL de la route voulue, en **1920×1080**.
-Le navigateur se connecte directement à Cider. Ajouter son adresse, son port et son token à chaque
-URL, par exemple :
-`https://overlays.laxe4k.com/background?CiderAdress=127.0.0.1&CiderPort=10767&CiderToken=VOTRE_TOKEN`.
-`CiderAddress` (orthographe standard) est aussi accepté à la place de `CiderAdress`.
+La couleur est extraite de la pochette fournie par SMTC Bridge, sans connexion directe au lecteur
+de musique ni identifiants de service. Le Bridge doit tourner sur la machine qui exécute OBS.
+Par défaut, l'overlay interroge `http://127.0.0.1:5000/now-playing`. Pour utiliser une autre
+adresse, ajouter `SMTCBridgeUrl` à l'URL de l'overlay, par exemple :
+`https://overlays.laxe4k.com/background?SMTCBridgeUrl=http%3A%2F%2F127.0.0.1%3A5000%2Fnow-playing`.
+Pour ignorer une ou plusieurs applications, ajouter `excludedApplications` avec leurs noms ou
+identifiants `source_app_id`, séparés par des virgules. Par exemple
+`?excludedApplications=Brave` ignore les sessions dont l'identifiant contient `Brave`, et
+`?excludedApplications=Brave%20%2C%20AppleInc.AppleMusicWin_nzyj5cx40ttqa!App` ignore Brave et
+Apple Music. La comparaison ne tient pas compte des majuscules.
 
 ## Stack
 
 - [Vue.js 3](https://vuejs.org/) + TypeScript
 - [Vite](https://vite.dev/)
 - [GSAP](https://gsap.com/) - animations d'entrée du texte
-- [Cider](https://cider.sh/) - couleur dynamique de l'illustration de l'album
+- [SMTC Bridge](https://github.com/nuttylmao/smtc-bridge) - état de lecture Windows et pochette
 
 ## Structure
 
@@ -63,38 +69,15 @@ npm install
 npm run dev
 ```
 
-La couleur `artwork.bgColor` est reçue via le flux Socket.IO de Cider (port `10767` par défaut).
-Le WebSocket Socket.IO est la source principale : il fournit la couleur au démarrage, lors des
-changements de morceau et à la pause/reprise, avec reconnexion automatique. REST est uniquement
-utilisé en secours si le WebSocket échoue ou ne fournit pas l'état initial dans les 2 secondes.
-Si Cider ne fournit pas `artwork.bgColor`, la page attend 500 ms avant d'échantillonner l'image de
-pochette (le serveur d'image doit autoriser CORS), pour laisser à Cider le temps d'envoyer sa
-couleur. Les couleurs trop sombres sont éclaircies automatiquement.
+Toutes les secondes, l'overlay lit `/now-playing`, prend la session indiquée par
+`current_session_id` (ou, si ce champ manque, une session en lecture avec une pochette) et extrait
+la couleur de sa vignette base64. L'extraction regroupe les pixels par couleurs proches, favorise
+les tons saturés et éclaircit le résultat pour le rendre visible. Cela fonctionne avec Cider,
+Spotify, Apple Music, Deezer, Tidal et tout autre lecteur qui publie sa session via Windows SMTC.
+La couleur par défaut, utilisée si aucune pochette exploitable n'est disponible, est `#53ac6a`.
 
-### REST depuis une page HTTPS
-
-Les appels REST de secours à `/api/v1/playback/is-playing` et `/api/v1/playback/now-playing`
-envoient le token obligatoire dans l'en-tête `apptoken`. Depuis
-`https://overlays.laxe4k.com`, cet en-tête déclenche une prérequête CORS `OPTIONS`. Si la version
-de Cider utilisée répond `404` à cette prérequête, le navigateur bloque ensuite le `GET` : il
-n'existe pas de correctif frontend sûr qui conserve l'authentification et permette de lire la
-réponse. L'API v2 documentée actuellement par Cider conserve également l'en-tête `apptoken` et ne
-supprime donc pas cette prérequête.
-
-En cas d'échec du REST Cider, l'overlay essaie aussi le secours local
-[SMTC Bridge](https://github.com/nuttylmao/smtc-bridge) sur
-`http://127.0.0.1:5000/now-playing`. Il fournit l'état de lecture Windows et la pochette encodée en
-base64 ; le code `PlaybackStatus` `4` signifie lecture, `5` pause, et `3` arrêt. L'URL du secours
-peut être remplacée avec le paramètre `SMTCBridgeUrl`. SMTC Bridge doit être lancé sur la machine
-qui exécute le navigateur OBS. L'overlay cherche en priorité l'identifiant
-`CiderCollective.Cider_a6qxe093bx5xj!App`, puis une session dont `source_app_id` contient
-`Cider` (sans tenir compte de la casse) ; il n'utilise pas les sessions d'autres applications.
-Cette alternative ne change ni le WebSocket Cider ni son authentification.
-
-> Le token dans `CiderToken` est visible dans l'URL, l'historique du navigateur et potentiellement
-> les journaux OBS. Utiliser cette URL uniquement dans un navigateur de confiance et révoquer le
-> token s'il a été exposé. L'adresse IP doit être joignable depuis l'appareil qui exécute OBS.
-> Sans connexion valide ou sans token, la couleur par défaut est `#53ac6a`.
+Pour une page servie en HTTPS, le navigateur doit autoriser son accès à l'adresse HTTP locale du
+Bridge. SMTC Bridge doit autoriser les requêtes CORS de l'origine de l'overlay.
 
 ## Build & Déploiement
 

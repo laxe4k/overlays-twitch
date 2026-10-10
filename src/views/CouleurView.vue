@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue'
-import { lerpColor, useCiderArtworkColor } from '@/composables/useDotField'
+import { lerpColor, useSmtcArtworkColor } from '@/composables/useDotField'
 
-const color = useCiderArtworkColor()
+const color = useSmtcArtworkColor()
 const backgroundColor = computed(
   () =>
     `rgb(${Math.round(color.r * 255)} ${Math.round(color.g * 255)} ${Math.round(color.b * 255)})`,

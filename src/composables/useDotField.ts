@@ -15,6 +15,7 @@ const SMTC_BRIDGE_URL =
 const CIDER_RECONNECT_DELAY = 2000
 const WS_INITIAL_STATE_TIMEOUT = 2000
 const GET_CURRENT_ITEM_TIMEOUT = 500
+const ARTWORK_COLOR_FALLBACK_DELAY = 500
 const PAUSE_RESET_DELAY = 2500
 
 const color = reactive({ ...DEFAULT_COLOR })
@@ -33,6 +34,8 @@ let getCurrentItemTimeout: ReturnType<typeof setTimeout> | undefined
 let pauseResetTimer: ReturnType<typeof setTimeout> | undefined
 let currentArtworkUrl: string | undefined
 let artworkRequestId = 0
+let artworkFallbackTimer: ReturnType<typeof setTimeout> | undefined
+let pendingArtworkUrl: string | undefined
 let restSyncInProgress = false
 const artworkColorCache = new Map<string, [number, number, number]>()
 
@@ -47,6 +50,7 @@ interface ColorBucket {
 function resetToDefaultColor() {
   if (pauseResetTimer) clearTimeout(pauseResetTimer)
   pauseResetTimer = undefined
+  cancelArtworkImageFallback()
   artworkRequestId++
   targetR = DEFAULT_COLOR.r
   targetG = DEFAULT_COLOR.g
@@ -63,6 +67,7 @@ function restoreCachedArtworkColor() {
 
 function schedulePauseReset() {
   if (pauseResetTimer) clearTimeout(pauseResetTimer)
+  cancelArtworkImageFallback()
   pauseResetTimer = setTimeout(() => {
     pauseResetTimer = undefined
     resetToDefaultColor()
@@ -209,39 +214,98 @@ function loadColorFromArtworkImage(url: string) {
   image.src = url
 }
 
-function updateColorFromArtwork(value: unknown): boolean {
+function cancelArtworkImageFallback() {
+  if (artworkFallbackTimer) clearTimeout(artworkFallbackTimer)
+  artworkFallbackTimer = undefined
+  pendingArtworkUrl = undefined
+}
+
+function scheduleArtworkImageFallback(url: string) {
+  if (url === currentArtworkUrl || url === pendingArtworkUrl) return
+
+  cancelArtworkImageFallback()
+  artworkRequestId++
+  pendingArtworkUrl = url
+  artworkFallbackTimer = setTimeout(() => {
+    artworkFallbackTimer = undefined
+    pendingArtworkUrl = undefined
+    loadColorFromArtworkImage(url)
+  }, ARTWORK_COLOR_FALLBACK_DELAY)
+}
+
+function findArtworkWithBgColor(
+  value: unknown,
+): { color: string; url?: string } | undefined {
   if (Array.isArray(value)) {
-    return value.some(updateColorFromArtwork)
+    for (const item of value) {
+      const result = findArtworkWithBgColor(item)
+      if (result) return result
+    }
+    return undefined
   }
 
-  if (typeof value !== 'object' || value === null) {
-    return false
-  }
+  if (!isRecord(value)) return undefined
 
-  const artwork = 'artwork' in value ? value.artwork : undefined
-  if (typeof artwork === 'object' && artwork !== null) {
-    if ('bgColor' in artwork && typeof artwork.bgColor === 'string') {
-      const match = /^#?([0-9a-f]{6})$/i.exec(artwork.bgColor)
-      if (match?.[1]) {
-        currentArtworkUrl =
-          'url' in artwork && typeof artwork.url === 'string' ? artwork.url : undefined
-        artworkRequestId++
-        setTargetColor(
-          parseInt(match[1].slice(0, 2), 16) / 255,
-          parseInt(match[1].slice(2, 4), 16) / 255,
-          parseInt(match[1].slice(4, 6), 16) / 255,
-        )
-        return true
+  const artwork = value.artwork
+  if (isRecord(artwork) && typeof artwork.bgColor === 'string') {
+    const match = /^#?([0-9a-f]{6})$/i.exec(artwork.bgColor)
+    if (match?.[1]) {
+      return {
+        color: match[1],
+        url: typeof artwork.url === 'string' ? artwork.url : undefined,
       }
     }
-
-    if ('url' in artwork && typeof artwork.url === 'string' && artwork.url.trim()) {
-      loadColorFromArtworkImage(artwork.url)
-      return true
-    }
   }
 
-  return Object.values(value).some(updateColorFromArtwork)
+  for (const item of Object.values(value)) {
+    const result = findArtworkWithBgColor(item)
+    if (result) return result
+  }
+  return undefined
+}
+
+function findArtworkUrl(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const url = findArtworkUrl(item)
+      if (url) return url
+    }
+    return undefined
+  }
+
+  if (!isRecord(value)) return undefined
+
+  const artwork = value.artwork
+  if (isRecord(artwork) && typeof artwork.url === 'string' && artwork.url.trim()) {
+    return artwork.url.trim()
+  }
+
+  for (const item of Object.values(value)) {
+    const url = findArtworkUrl(item)
+    if (url) return url
+  }
+  return undefined
+}
+
+function updateColorFromArtwork(value: unknown): boolean {
+  const artworkWithColor = findArtworkWithBgColor(value)
+  if (artworkWithColor) {
+    cancelArtworkImageFallback()
+    currentArtworkUrl = artworkWithColor.url
+    artworkRequestId++
+    setTargetColor(
+      parseInt(artworkWithColor.color.slice(0, 2), 16) / 255,
+      parseInt(artworkWithColor.color.slice(2, 4), 16) / 255,
+      parseInt(artworkWithColor.color.slice(4, 6), 16) / 255,
+    )
+    return true
+  }
+
+  const artworkUrl = findArtworkUrl(value)
+  if (!artworkUrl) return false
+
+  scheduleArtworkImageFallback(artworkUrl)
+  return true
 }
 
 function getPlaybackState(value: unknown): boolean | undefined {

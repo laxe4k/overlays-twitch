@@ -67,9 +67,9 @@ La couleur `artwork.bgColor` est reçue via le flux Socket.IO de Cider (port `10
 Le WebSocket Socket.IO est la source principale : il fournit la couleur au démarrage, lors des
 changements de morceau et à la pause/reprise, avec reconnexion automatique. REST est uniquement
 utilisé en secours si le WebSocket échoue ou ne fournit pas l'état initial dans les 2 secondes.
-Si Cider ne
-fournit pas `artwork.bgColor`, la page échantillonne l'image de pochette (le serveur d'image doit
-autoriser CORS). Les couleurs trop sombres sont éclaircies automatiquement.
+Si Cider ne fournit pas `artwork.bgColor`, la page attend 500 ms avant d'échantillonner l'image de
+pochette (le serveur d'image doit autoriser CORS), pour laisser à Cider le temps d'envoyer sa
+couleur. Les couleurs trop sombres sont éclaircies automatiquement.
 
 ### REST depuis une page HTTPS
 
